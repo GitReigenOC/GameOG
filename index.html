@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101512">
+  <title>BLACKSITE — Tactical Arena</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="game-shell">
+    <header class="topbar">
+      <div class="brand">BLACK<span>SITE</span></div>
+      <div class="status"><span class="dot"></span> Training simulation <button class="pause-button" id="pause-button" type="button">Ⅱ Pause</button></div>
+    </header>
+    <section class="stage" aria-label="First-person tactical arena game">
+      <canvas id="game" aria-label="Game view"></canvas>
+      <div class="hud" aria-live="polite">
+        <div class="hud-column">
+          <div>
+            <div class="eyebrow">Sector 07 / Nightfall</div>
+            <div class="wave" id="wave">WAVE 01</div>
+            <div class="objective" id="objective">Clear the hostile forces</div>
+          </div>
+          <div>
+            <div class="stat-label">VITALS</div>
+            <div class="stat-value" id="health">100</div>
+            <div class="health-track"><div class="health-fill" id="health-fill"></div></div>
+            <div class="tactical-counts"><span>G FRAG <b id="grenade-count">2</b></span><span>F FLASH <b id="flash-count">1</b></span></div>
+          </div>
+        </div>
+        <div class="hud-column hud-column--right">
+          <div class="stat-label">SCORE <span class="stat-value score-value" id="score">0000</span></div>
+          <div class="ammo-panel">
+            <div class="stat-label"><span id="weapon-label">ASSAULT RIFLE</span> / <span id="reserve">090</span> RESERVE</div>
+            <div class="stat-value ammo"><span id="ammo">30</span><span class="ammo-divider"> / <span id="magazine">30</span></span></div>
+          </div>
+        </div>
+      </div>
+      <div class="crosshair" id="crosshair"></div>
+      <div class="hit-marker" id="hit-marker"></div>
+      <div class="weapon-toast" id="weapon-toast"></div>
+      <div class="combat-message" id="combat-message" aria-live="polite"></div>
+      <div class="scope-overlay" id="scope-overlay" hidden aria-hidden="true">
+        <div class="scope-lens">
+          <span class="scope-reticle scope-reticle--vertical"></span>
+          <span class="scope-reticle scope-reticle--horizontal"></span>
+          <span class="scope-reticle scope-reticle--center"></span>
+          <span class="scope-range scope-range--top">· &nbsp;· &nbsp;·</span>
+          <span class="scope-range scope-range--bottom">· &nbsp;· &nbsp;·</span>
+          <span class="scope-mark scope-mark--left"></span>
+          <span class="scope-mark scope-mark--right"></span>
+        </div>
+      </div>
+      <div class="damage-overlay" id="damage-overlay"></div>
+      <div class="weapon-slots" aria-label="Select weapon">
+        <button class="weapon-slot active" data-weapon="0" aria-label="1 Assault Rifle">1 RIFLE</button>
+        <button class="weapon-slot" data-weapon="1" aria-label="2 Sniper Rifle">2 SNIPER</button>
+        <button class="weapon-slot" data-weapon="2" aria-label="3 Shotgun">3 SHOTGUN</button>
+        <button class="weapon-slot" data-weapon="3" aria-label="4 SMG">4 SMG</button>
+        <button class="weapon-slot" data-weapon="4" aria-label="5 Combat Knife">5 KNIFE</button>
+      </div>
+      <div class="menu-layer" id="profile-screen">
+        <form class="menu-panel profile-form" id="profile-name-form">
+          <div class="kicker">OPERATOR PROFILE / LOCAL DEMO</div>
+          <h1>WHAT'S<br>YOUR NAME?</h1>
+          <p>Choose the callsign shown on your local operator profile.</p>
+          <label class="form-label" for="profile-name">USERNAME</label>
+          <input id="profile-name" name="username" maxlength="16" minlength="2" autocomplete="nickname" placeholder="Enter a callsign" required>
+          <div class="form-error" id="profile-error" role="alert"></div>
+          <button type="submit">Create profile</button>
+        </form>
+      </div>
+      <div class="menu-layer" id="main-menu" hidden>
+        <div class="menu-panel">
+          <div class="kicker">BLACKSITE / TRAINING SIMULATION</div>
+          <h1>CHOOSE YOUR<br>MISSION</h1>
+          <p>Signed in locally as <strong id="menu-username">Operator</strong></p>
+          <div class="menu-actions">
+            <button type="button" id="solo-button">Play solo</button>
+            <button type="button" id="multiplayer-button" class="button-secondary">Multiplayer</button>
+            <button type="button" id="settings-button" class="button-secondary">Settings</button>
+            <button type="button" id="profile-button" class="button-text">View operator profile</button>
+          </div>
+          <p class="prototype-note">Multiplayer is a local UI demo. Servers and other players are not connected.</p>
+        </div>
+      </div>
+      <div class="menu-layer" id="multiplayer-menu" hidden>
+        <div class="menu-panel menu-panel--wide">
+          <div class="kicker">MULTIPLAYER / PROTOTYPE LOBBY</div>
+          <h1>SELECT A MODE</h1>
+          <p>Choose a match type, then browse demo rooms. Matchmaking is not connected to the internet.</p>
+          <div class="mode-grid">
+            <button class="mode-card selected" type="button" data-mode="ffa-waves"><strong>CO-OP WAVES</strong><span>Survive escalating enemy waves together.</span></button>
+            <button class="mode-card" type="button" data-mode="duel"><strong>1 VS 1</strong><span>One opponent. First elimination wins.</span></button>
+            <button class="mode-card" type="button" data-mode="ffa"><strong>FREE-FOR-ALL</strong><span>Every operator for themselves.</span></button>
+            <button class="mode-card" type="button" data-mode="tdm"><strong>TEAM DEATHMATCH</strong><span>Two teams compete for eliminations.</span></button>
+          </div>
+          <div class="menu-actions menu-actions--row">
+            <button type="button" id="public-servers-button">Browse public rooms</button>
+            <button type="button" id="private-servers-button" class="button-secondary">Private room</button>
+          </div>
+          <button type="button" class="button-text" data-back="main-menu">Back</button>
+        </div>
+      </div>
+      <div class="menu-layer" id="servers-menu" hidden>
+        <div class="menu-panel menu-panel--wide">
+          <div class="kicker" id="servers-kicker">PUBLIC ROOMS / DEMO DATA</div>
+          <h1 id="servers-title">ROOM BROWSER</h1>
+          <div class="server-toolbar">
+            <span class="prototype-note">Local demo rooms only — no network players.</span>
+            <button type="button" id="create-room-button" class="button-secondary">Create private room</button>
+          </div>
+          <div class="server-content">
+            <div class="room-list" id="room-list"></div>
+            <aside class="room-details" id="room-details">
+              <div class="kicker">ROOM DETAILS</div>
+              <p>Select a room to see its players and profile cards.</p>
+            </aside>
+          </div>
+          <div class="menu-actions menu-actions--row">
+            <button type="button" id="join-room-button" disabled>Join selected room</button>
+            <button type="button" id="back-to-modes" class="button-secondary">Back to modes</button>
+          </div>
+          <div class="form-error" id="room-message" role="status"></div>
+        </div>
+      </div>
+      <div class="menu-layer" id="profile-modal" hidden>
+        <div class="menu-panel profile-card">
+          <button type="button" class="modal-close" id="close-profile-modal" aria-label="Close profile">×</button>
+          <div class="kicker">OPERATOR PROFILE</div>
+          <div class="avatar" id="profile-avatar">OP</div>
+          <h1 id="profile-card-name">Operator</h1>
+          <p id="profile-card-info">Training simulation operator</p>
+          <button type="button" id="profile-card-close">Close profile</button>
+        </div>
+      </div>
+      <div class="menu-layer" id="settings-screen" hidden>
+        <div class="menu-panel settings-panel">
+          <div class="kicker">CONTROL SETTINGS / SAVED LOCALLY</div>
+          <h1>LOOK<br>SENSITIVITY</h1>
+          <p>Adjust mouse turn speed. Scoped sensitivity is a multiplier of your normal sensitivity.</p>
+          <label class="setting-row" for="sensitivity-setting">
+            <span>Mouse sensitivity <output id="sensitivity-value" for="sensitivity-setting">1.00×</output></span>
+            <input id="sensitivity-setting" type="range" min="0.2" max="3" step="0.05" value="1">
+            <span class="setting-hint">Lower for finer aim · Higher for quicker turns</span>
+          </label>
+          <label class="setting-row" for="scope-sensitivity-setting">
+            <span>Scoped sensitivity <output id="scope-sensitivity-value" for="scope-sensitivity-setting">0.44×</output></span>
+            <input id="scope-sensitivity-setting" type="range" min="0.2" max="1" step="0.02" value="0.44">
+            <span class="setting-hint">Multiplies your mouse sensitivity while scoped</span>
+          </label>
+          <div class="menu-actions">
+            <button type="button" id="settings-back-button">Back</button>
+          </div>
+        </div>
+      </div>
+      <div class="overlay" id="overlay" hidden>
+        <div class="panel">
+          <div class="kicker" id="overlay-kicker">SINGLE-PLAYER / SURVIVAL</div>
+          <h1 id="overlay-title">HOLD THE<br>PERIMETER</h1>
+          <p id="overlay-copy">Survive incoming waves in a hostile training zone. Aim with your mouse, fire to engage, and keep moving.</p>
+          <button id="start-button">Deploy</button>
+          <button id="pause-settings-button" class="button-secondary" type="button" hidden>Settings</button>
+          <button id="return-menu-button" class="button-secondary" type="button" hidden>Return to menu</button>
+        </div>
+      </div>
+    </section>
+    <footer class="bottombar">
+      <span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> MOVE</span>&nbsp;&nbsp; · &nbsp;&nbsp;
+      <span><kbd>SHIFT</kbd> SPRINT / <kbd>C</kbd> SLIDE</span>&nbsp;&nbsp; · &nbsp;&nbsp;
+      <span>MOUSE AIM</span>&nbsp;&nbsp; · &nbsp;&nbsp;
+      <span><kbd>CLICK</kbd> FIRE</span>&nbsp;&nbsp; · &nbsp;&nbsp;
+      <span><kbd>1-5</kbd> / WHEEL SWAP</span>&nbsp;&nbsp; · &nbsp;&nbsp;
+      <span><kbd>R</kbd> RELOAD</span>&nbsp;&nbsp; · &nbsp;&nbsp;
+      <span><kbd>RIGHT CLICK</kbd> AIM</span>&nbsp;&nbsp; · &nbsp;&nbsp;
+      <span><kbd>G</kbd> FRAG / <kbd>F</kbd> FLASH</span>&nbsp;&nbsp; · &nbsp;&nbsp;
+      <span><kbd>ESC</kbd> PAUSE</span>
+    </footer>
+  </main>
+  <script src="game.js" defer></script>
+</body>
+</html>
