@@ -5,7 +5,7 @@ description: A browser-based tactical arena training game.
   <main class="game-shell">
     <header class="topbar">
       <div class="brand">BLACK<span>SITE</span></div>
-      <div class="status"><span class="dot"></span> Training simulation <button class="pause-button" id="pause-button" type="button">Ⅱ Pause</button></div>
+      <div class="status"><span class="dot"></span> Training simulation <button class="pause-button" id="fullscreen-button" type="button" aria-label="Enter fullscreen">⛶ Fullscreen</button><button class="pause-button" id="pause-button" type="button">Ⅱ Pause</button></div>
     </header>
     <section class="stage" aria-label="First-person tactical arena game">
       <canvas id="game" aria-label="Game view"></canvas>
@@ -91,14 +91,14 @@ description: A browser-based tactical arena training game.
             <button type="button" id="settings-button" class="button-secondary">Settings</button>
             <button type="button" id="profile-button" class="button-text">View operator profile</button>
           </div>
-          <p class="prototype-note">Multiplayer is a local UI demo. Servers and other players are not connected.</p>
+          <p class="prototype-note">Private matches connect two browsers directly using WebRTC.</p>
         </div>
       </div>
       <div class="menu-layer" id="multiplayer-menu" hidden>
         <div class="menu-panel menu-panel--wide">
           <div class="kicker">MULTIPLAYER / PROTOTYPE LOBBY</div>
           <h1>SELECT A MODE</h1>
-          <p>Choose a match type, then browse demo rooms. Matchmaking is not connected to the internet.</p>
+          <p>Host a private peer-to-peer room or join with its invite code. Public room discovery requires a separate directory service.</p>
           <div class="mode-grid">
             <button class="mode-card selected" type="button" data-mode="ffa-waves"><strong>CO-OP WAVES</strong><span>Survive escalating enemy waves together.</span></button>
             <button class="mode-card" type="button" data-mode="duel"><strong>1 VS 1</strong><span>One opponent. First elimination wins.</span></button>
@@ -106,19 +106,24 @@ description: A browser-based tactical arena training game.
             <button class="mode-card" type="button" data-mode="tdm"><strong>TEAM DEATHMATCH</strong><span>Two teams compete for eliminations.</span></button>
           </div>
           <div class="menu-actions menu-actions--row">
-            <button type="button" id="public-servers-button">Browse public rooms</button>
-            <button type="button" id="private-servers-button" class="button-secondary">Private room</button>
+            <button type="button" id="public-servers-button">Create or join a room</button>
+            <button type="button" id="private-servers-button" class="button-secondary">Private room options</button>
           </div>
           <button type="button" class="button-text" data-back="main-menu">Back</button>
         </div>
       </div>
       <div class="menu-layer" id="servers-menu" hidden>
         <div class="menu-panel menu-panel--wide">
-          <div class="kicker" id="servers-kicker">PUBLIC ROOMS / DEMO DATA</div>
-          <h1 id="servers-title">ROOM BROWSER</h1>
+          <div class="kicker" id="servers-kicker">PEER-TO-PEER / PRIVATE ROOM</div>
+          <h1 id="servers-title">PRIVATE LOBBY</h1>
           <div class="server-toolbar">
-            <span class="prototype-note">Local demo rooms only — no network players.</span>
+            <span class="prototype-note">Share the invite code with one player. Both players need an internet connection.</span>
             <button type="button" id="create-room-button" class="button-secondary">Create private room</button>
+          </div>
+          <label class="form-label" for="room-code-input">ROOM INVITE CODE</label>
+          <div class="room-join-row">
+            <input id="room-code-input" maxlength="24" autocomplete="off" placeholder="Enter the host's room code">
+            <button type="button" id="connect-room-button" class="button-secondary">Connect</button>
           </div>
           <div class="server-content">
             <div class="room-list" id="room-list"></div>
@@ -128,7 +133,7 @@ description: A browser-based tactical arena training game.
             </aside>
           </div>
           <div class="menu-actions menu-actions--row">
-            <button type="button" id="join-room-button" disabled>Join selected room</button>
+            <button type="button" id="join-room-button" disabled>Disconnect room</button>
             <button type="button" id="back-to-modes" class="button-secondary">Back to modes</button>
           </div>
           <div class="form-error" id="room-message" role="status"></div>

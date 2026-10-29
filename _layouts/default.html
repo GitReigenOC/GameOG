@@ -10,6 +10,9 @@
 </head>
 <body>
   {{ content }}
+  <script src="https://cdn.jsdelivr.net/npm/three@0.146.0/build/three.min.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.146.0/examples/js/loaders/GLTFLoader.js" defer></script>
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js" defer></script>
   <script src="{{ '/game.js' | relative_url }}" defer></script>
 </body>
 </html>

@@ -54,6 +54,8 @@
 
     .stage { position: relative; aspect-ratio: 16 / 9; background: #18201a; }
     canvas { width: 100%; height: 100%; display: block; }
+    .game-shell:fullscreen { display: flex; flex-direction: column; width: 100vw; height: 100vh; border: 0; }
+    .game-shell:fullscreen .stage { flex: 1; min-height: 0; aspect-ratio: auto; }
 
     .hud {
       position: absolute;
@@ -226,6 +228,8 @@
     .menu-actions--row { grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 8px 0; }
     .server-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; text-align: left; }
     .server-toolbar button { flex: 0 0 auto; margin: 0; padding: 9px 12px; font-size: 9px; }
+    .room-join-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+    .room-join-row button { margin: 0; padding: 10px 14px; }
     .server-content { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; min-height: 180px; margin-top: 12px; text-align: left; }
     .room-list, .room-details { max-height: 220px; overflow-y: auto; padding: 8px; border: 1px solid #384238; background: #0e130f; }
     .room-entry { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; margin: 0 0 6px; padding: 10px; border: 1px solid #303a31; background: #171e18; color: #dce5d4; text-align: left; letter-spacing: .04em; }
@@ -319,6 +323,7 @@
       .room-list { max-height: 140px; }
       .menu-actions--row { grid-template-columns: 1fr; }
       .server-toolbar { align-items: flex-start; flex-direction: column; }
+      .room-join-row { grid-template-columns: 1fr; }
     }
 
     @media (max-width: 560px) {
