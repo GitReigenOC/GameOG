@@ -1,0 +1,12 @@
+title: BLACKSITE — Tactical Arena
+description: A browser-based tactical arena training game.
+url: https://gitreigenoc.github.io
+baseurl: /GameOG
+markdown: kramdown
+
+defaults:
+  - scope:
+      path: ""
+      type: pages
+    values:
+      layout: default
