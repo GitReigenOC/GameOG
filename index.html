@@ -54,6 +54,21 @@ description: A browser-based tactical arena training game.
         <button class="weapon-slot" data-weapon="3" aria-label="4 SMG">4 SMG</button>
         <button class="weapon-slot" data-weapon="4" aria-label="5 Combat Knife">5 KNIFE</button>
       </div>
+      <div class="mobile-controls" aria-label="Touch controls">
+        <div class="touch-stick" id="touch-stick" aria-label="Move">
+          <span class="touch-stick-knob" id="touch-stick-knob"></span>
+        </div>
+        <div class="touch-actions">
+          <button type="button" class="touch-action" id="touch-aim">AIM</button>
+          <button type="button" class="touch-action touch-action--fire" id="touch-fire">FIRE</button>
+          <button type="button" class="touch-action" id="touch-dash">DASH</button>
+          <button type="button" class="touch-action" id="touch-reload">RELOAD</button>
+          <button type="button" class="touch-action" id="touch-sprint">SPRINT</button>
+          <button type="button" class="touch-action" id="touch-swap">SWAP</button>
+          <button type="button" class="touch-action" id="touch-frag">FRAG</button>
+          <button type="button" class="touch-action" id="touch-flash">FLASH</button>
+        </div>
+      </div>
       <div class="menu-layer" id="profile-screen">
         <form class="menu-panel profile-form" id="profile-name-form">
           <div class="kicker">OPERATOR PROFILE / LOCAL DEMO</div>
@@ -162,7 +177,7 @@ description: A browser-based tactical arena training game.
     </section>
     <footer class="bottombar">
       <span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> MOVE</span>&nbsp;&nbsp; · &nbsp;&nbsp;
-      <span><kbd>SHIFT</kbd> SPRINT / <kbd>C</kbd> SLIDE</span>&nbsp;&nbsp; · &nbsp;&nbsp;
+      <span><kbd>SHIFT</kbd> SPRINT / <kbd>C</kbd> DASH</span>&nbsp;&nbsp; · &nbsp;&nbsp;
       <span>MOUSE AIM</span>&nbsp;&nbsp; · &nbsp;&nbsp;
       <span><kbd>CLICK</kbd> FIRE</span>&nbsp;&nbsp; · &nbsp;&nbsp;
       <span><kbd>1-5</kbd> / WHEEL SWAP</span>&nbsp;&nbsp; · &nbsp;&nbsp;

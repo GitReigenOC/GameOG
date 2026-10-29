@@ -57,9 +57,11 @@
       let fireCooldown = 0, reloadTimer = 0, hurtFlash = 0, muzzleFlash = 0, hitTimeout = 0;
       let reloadDuration = 0;
       let firing = false, aiming = false, toastTimeout = 0, knifeSwing = 0, movementBob = 0;
-      let weaponRecoil = 0, weaponLagX = 0, slideTimer = 0, slideCooldown = 0;
-      let slideDirectionX = 0, slideDirectionY = 0;
-      const slideDuration = .72;
+      let weaponRecoil = 0, weaponLagX = 0, dashTimer = 0, dashCooldown = 0;
+      let dashDirectionX = 0, dashDirectionY = 0;
+      const dashDuration = .38;
+      let touchMovementX = 0, touchMovementY = 0, lookPointerId = null, lastLookX = 0;
+      let touchStickPointerId = null;
       let grenadeCooldown = 0, flashbangCooldown = 0, grenadeAnimation = 0, flashbangAnimation = 0;
       let grenades = 2, flashbangs = 1;
       let grenadeFlash = 0, damageMessageTimer = 0, footstepsTimer = 0, audioContext = null, ambientStarted = false;
@@ -450,6 +452,30 @@
         if (!wallAt(player.x, player.y + dy + Math.sign(dy) * radius)) player.y += dy;
       }
 
+      function movementInput() {
+        const forward = (keys.has("KeyW") ? 1 : 0) - (keys.has("KeyS") ? 1 : 0) - touchMovementY;
+        const strafe = (keys.has("KeyD") ? 1 : 0) - (keys.has("KeyA") ? 1 : 0) + touchMovementX;
+        const length = Math.hypot(forward, strafe);
+        if (length > 1) return { forward: forward / length, strafe: strafe / length };
+        return { forward, strafe };
+      }
+
+      function isSprinting() {
+        return keys.has("ShiftLeft") || keys.has("ShiftRight");
+      }
+
+      function resetTouchControls() {
+        touchMovementX = 0;
+        touchMovementY = 0;
+        touchStickPointerId = null;
+        lookPointerId = null;
+        document.querySelector("#touch-stick-knob").style.transform = "translate(-50%, -50%)";
+        document.querySelectorAll(".touch-action").forEach(button => button.classList.remove("active"));
+        keys.delete("ShiftLeft");
+        firing = false;
+        aiming = false;
+      }
+
       function spawnWave() {
         wave++;
         const count = isWaveMode() ? Math.min(3 + wave * 2, 15) :
@@ -510,8 +536,8 @@
       }
 
       function cameraHorizon() {
-        const slideProgress = slideTimer > 0 ? 1 - slideTimer / slideDuration : 0;
-        return height * .48 + Math.sin(slideProgress * Math.PI) * height * .07;
+        const dashProgress = dashTimer > 0 ? 1 - dashTimer / dashDuration : 0;
+        return height * .48 + Math.sin(dashProgress * Math.PI) * height * .085;
       }
 
       function renderWorld() {
@@ -576,6 +602,7 @@
           const screenX = projectHorizontal(relative);
           const size = Math.min(height * 1.25, height / distance * .72);
           const centerY = horizon + size * .08 + Math.sin(enemy.phase) * size * .012;
+          const gait = Math.sin(enemy.phase) * size * .018;
           const left = screenX - size * .22, right = screenX + size * .22;
           const visible = [];
           for (let x = Math.max(0, Math.floor(left)); x < Math.min(width, Math.ceil(right)); x += 2) {
@@ -591,14 +618,14 @@
           ctx.fillStyle = "#252b25";
           ctx.beginPath();
           ctx.moveTo(screenX - size * .12, centerY + size * .24);
-          ctx.lineTo(screenX - size * .075, centerY + size * .42);
-          ctx.lineTo(screenX - size * .018, centerY + size * .42);
+          ctx.lineTo(screenX - size * .075 + gait, centerY + size * .42);
+          ctx.lineTo(screenX - size * .018 + gait, centerY + size * .42);
           ctx.lineTo(screenX - size * .022, centerY + size * .22);
           ctx.closePath(); ctx.fill();
           ctx.beginPath();
           ctx.moveTo(screenX + size * .025, centerY + size * .22);
-          ctx.lineTo(screenX + size * .025, centerY + size * .42);
-          ctx.lineTo(screenX + size * .09, centerY + size * .42);
+          ctx.lineTo(screenX + size * .025 - gait, centerY + size * .42);
+          ctx.lineTo(screenX + size * .09 - gait, centerY + size * .42);
           ctx.lineTo(screenX + size * .13, centerY + size * .24);
           ctx.closePath(); ctx.fill();
           ctx.fillStyle = "#141714";
@@ -622,13 +649,13 @@
           ctx.fillStyle = "#32392f";
           ctx.beginPath();
           ctx.moveTo(screenX - size * .14, centerY - size * .04);
-          ctx.lineTo(screenX - size * .22, centerY + size * .2);
+          ctx.lineTo(screenX - size * .22 - gait * .8, centerY + size * .2);
           ctx.lineTo(screenX - size * .16, centerY + size * .24);
           ctx.lineTo(screenX - size * .08, centerY + size * .03);
           ctx.closePath(); ctx.fill();
           ctx.beginPath();
           ctx.moveTo(screenX + size * .14, centerY - size * .04);
-          ctx.lineTo(screenX + size * .22, centerY + size * .2);
+          ctx.lineTo(screenX + size * .22 + gait * .8, centerY + size * .2);
           ctx.lineTo(screenX + size * .16, centerY + size * .24);
           ctx.lineTo(screenX + size * .08, centerY + size * .03);
           ctx.closePath(); ctx.fill();
@@ -733,20 +760,19 @@
         if (aiming && weapon.scoped) return;
         const scale = height / 360;
         const weight = weaponWeight[player.weaponIndex];
-        const sprinting = !aiming && slideTimer === 0 &&
-          (keys.has("ShiftLeft") || keys.has("ShiftRight")) &&
-          (keys.has("KeyW") || keys.has("KeyS") || keys.has("KeyA") || keys.has("KeyD"));
-        const moving = sprinting || slideTimer > 0 ||
-          keys.has("KeyW") || keys.has("KeyS") || keys.has("KeyA") || keys.has("KeyD");
+        const input = movementInput();
+        const sprinting = !aiming && dashTimer === 0 && isSprinting() &&
+          (input.forward !== 0 || input.strafe !== 0);
+        const moving = sprinting || dashTimer > 0 || input.forward !== 0 || input.strafe !== 0;
         const sway = Math.sin(performance.now() * (sprinting ? .007 : .004)) * (2.5 + weight) +
-          Math.sin(movementBob) * (slideTimer > 0 || sprinting ? 6 : moving ? 2 : .5);
+          Math.sin(movementBob) * (dashTimer > 0 || sprinting ? 6 : moving ? 2 : .5);
         const recoil = weaponRecoil;
         const reloadProgress = reloadDuration ? 1 - reloadTimer / reloadDuration : 0;
         const reloadDrop = reloadKind === "reload" ? Math.sin(Math.PI * reloadProgress) * 42 : 0;
         const boltMotion = reloadKind === "chamber" ? Math.sin(reloadProgress * Math.PI) * 13 : 0;
         const x = width * (aiming ? .55 : .73) + (sway - weaponLagX * weight) * scale;
         const y = height + 12 * scale + recoil * scale + Math.abs(Math.sin(movementBob)) * (sprinting ? 7 : 2) * scale +
-          reloadDrop * scale + (slideTimer > 0 ? height * .045 : sprinting ? height * .012 : 0) -
+          reloadDrop * scale + (dashTimer > 0 ? height * .055 : sprinting ? height * .012 : 0) -
           (aiming && !weapon.scoped ? height * .04 : 0);
         const polygon = (points, fill, stroke = null) => {
           ctx.beginPath();
@@ -771,7 +797,7 @@
         ctx.save();
         ctx.translate(x, y);
         ctx.scale(scale, scale);
-        ctx.rotate(-.14 - weaponLagX * .0012 * weight + (slideTimer > 0 ? .08 : sprinting ? .035 : 0));
+        ctx.rotate(-.14 - weaponLagX * .0012 * weight + (dashTimer > 0 ? .2 : sprinting ? .035 : 0));
         ctx.translate(boltMotion, 0);
         const metal = ctx.createLinearGradient(-55, -190, 43, -30);
         metal.addColorStop(0, "#858b7b");
@@ -939,9 +965,9 @@
         renderExplosions();
         renderEnemies();
         renderWeapon();
-        if (slideTimer > 0) {
+        if (dashTimer > 0) {
           ctx.save();
-          ctx.globalAlpha = .22 * slideTimer / slideDuration;
+          ctx.globalAlpha = .24 * dashTimer / dashDuration;
           ctx.strokeStyle = "#b8c5a5";
           ctx.lineWidth = Math.max(1, width * .0015);
           for (let streak = 0; streak < 7; streak++) {
@@ -1040,17 +1066,15 @@
         }
       }
 
-      function startSlide() {
-        const forward = (keys.has("KeyW") ? 1 : 0) - (keys.has("KeyS") ? 1 : 0);
-        const strafe = (keys.has("KeyD") ? 1 : 0) - (keys.has("KeyA") ? 1 : 0);
+      function startDash() {
+        const { forward, strafe } = movementInput();
         const length = Math.hypot(forward, strafe);
-        if (!running || aiming || slideTimer > 0 || slideCooldown > 0 || length === 0 ||
-          (!keys.has("ShiftLeft") && !keys.has("ShiftRight"))) return;
-        slideDirectionX = (Math.cos(player.angle) * forward + Math.cos(player.angle + Math.PI / 2) * strafe) / length;
-        slideDirectionY = (Math.sin(player.angle) * forward + Math.sin(player.angle + Math.PI / 2) * strafe) / length;
-        slideTimer = slideDuration;
-        slideCooldown = 1.15;
-        setCombatMessage("SLIDE", 500);
+        if (!running || aiming || dashTimer > 0 || dashCooldown > 0 || length === 0) return;
+        dashDirectionX = (Math.cos(player.angle) * forward + Math.cos(player.angle + Math.PI / 2) * strafe) / length;
+        dashDirectionY = (Math.sin(player.angle) * forward + Math.sin(player.angle + Math.PI / 2) * strafe) / length;
+        dashTimer = dashDuration;
+        dashCooldown = .9;
+        setCombatMessage("DASH", 500);
       }
 
       function update(dt) {
@@ -1059,8 +1083,8 @@
         knifeSwing = Math.max(0, knifeSwing - dt * 4);
         weaponRecoil = Math.max(0, weaponRecoil - dt * 40);
         weaponLagX *= Math.max(0, 1 - dt * (5 / weaponWeight[player.weaponIndex]));
-        slideTimer = Math.max(0, slideTimer - dt);
-        slideCooldown = Math.max(0, slideCooldown - dt);
+        dashTimer = Math.max(0, dashTimer - dt);
+        dashCooldown = Math.max(0, dashCooldown - dt);
         hurtFlash = Math.max(0, hurtFlash - dt * 1.4);
         grenadeFlash = Math.max(0, grenadeFlash - dt * 2.8);
         grenadeCooldown = Math.max(0, grenadeCooldown - dt);
@@ -1087,27 +1111,25 @@
           }
         }
 
-        const forward = (keys.has("KeyW") ? 1 : 0) - (keys.has("KeyS") ? 1 : 0);
-        const strafe = (keys.has("KeyD") ? 1 : 0) - (keys.has("KeyA") ? 1 : 0);
+        const { forward, strafe } = movementInput();
         const length = Math.hypot(forward, strafe) || 1;
-        const moving = forward !== 0 || strafe !== 0 || slideTimer > 0;
-        const sprinting = !aiming && slideTimer === 0 &&
-          (keys.has("ShiftLeft") || keys.has("ShiftRight")) && (forward !== 0 || strafe !== 0);
+        const moving = forward !== 0 || strafe !== 0 || dashTimer > 0;
+        const sprinting = !aiming && dashTimer === 0 && isSprinting() && (forward !== 0 || strafe !== 0);
         if (moving) {
-          movementBob += dt * (slideTimer > 0 ? 16 : sprinting ? 18 : aiming ? 7 : 11);
+          movementBob += dt * (dashTimer > 0 ? 24 : sprinting ? 15 : aiming ? 7 : 11);
           footstepsTimer -= dt;
           if (footstepsTimer <= 0) {
             playSound("footstep");
-            footstepsTimer = slideTimer > 0 ? .24 : sprinting ? .29 : aiming ? .58 : .38;
+            footstepsTimer = dashTimer > 0 ? .2 : sprinting ? .36 : aiming ? .58 : .38;
           }
         } else {
           movementBob *= Math.max(0, 1 - dt * 5);
         }
-        if (slideTimer > 0) {
-          const slideSpeed = 5.8 * (.25 + .75 * slideTimer / slideDuration);
-          movePlayer(slideDirectionX * slideSpeed * dt, slideDirectionY * slideSpeed * dt);
+        if (dashTimer > 0) {
+          const dashSpeed = 9 * (.35 + .65 * dashTimer / dashDuration);
+          movePlayer(dashDirectionX * dashSpeed * dt, dashDirectionY * dashSpeed * dt);
         } else {
-          const speed = (aiming ? 2 : sprinting ? 5.2 : 3.2) * dt;
+          const speed = (aiming ? 2 : sprinting ? 4.2 : 3.2) * dt;
           movePlayer((Math.cos(player.angle) * forward + Math.cos(player.angle + Math.PI / 2) * strafe) / length * speed,
             (Math.sin(player.angle) * forward + Math.sin(player.angle + Math.PI / 2) * strafe) / length * speed);
         }
@@ -1175,8 +1197,8 @@
           flashbangCooldown = 0;
           grenadeFlash = 0;
           explosions = [];
-          slideTimer = 0;
-          slideCooldown = 0;
+          dashTimer = 0;
+          dashCooldown = 0;
           weaponRecoil = 0;
           weaponLagX = 0;
           wave = 0; enemies.length = 0; gameOver = false;
@@ -1201,7 +1223,7 @@
           : `LOCAL MULTIPLAYER DEMO / ${gameMode.toUpperCase()}`;
         document.querySelector("#overlay-title").innerHTML = gameMode === "waves" ? "HOLD THE<br>PERIMETER" : "MATCH<br>IN PROGRESS";
         document.querySelector("#overlay-copy").textContent = gameMode === "waves"
-          ? "Survive incoming waves in a hostile training zone. Aim with your mouse, fire to engage, and keep moving."
+          ? "Survive escalating hostile waves. Use WASD or the touch controls to move, aim and fire, and dash clear of danger."
           : "Local bot match preview. Public/private rooms are mock lobbies and are not connected to the internet.";
         startButton.textContent = "Deploy";
         document.querySelector("#pause-button").textContent = "Ⅱ Pause";
@@ -1209,9 +1231,11 @@
         document.querySelector("#pause-settings-button").hidden = true;
         returnMenuButton.hidden = true;
         if (wave === 0) spawnWave();
-        const pointerLockRequest = canvas.requestPointerLock?.();
-        if (pointerLockRequest && typeof pointerLockRequest.catch === "function") {
-          pointerLockRequest.catch(() => { pointerLockUnavailable = true; });
+        if (!window.matchMedia("(any-pointer: coarse)").matches) {
+          const pointerLockRequest = canvas.requestPointerLock?.();
+          if (pointerLockRequest && typeof pointerLockRequest.catch === "function") {
+            pointerLockRequest.catch(() => { pointerLockUnavailable = true; });
+          }
         }
       }
 
@@ -1220,7 +1244,8 @@
         running = false;
         firing = false;
         aiming = false;
-        slideTimer = 0;
+        dashTimer = 0;
+        resetTouchControls();
         keys.clear();
         overlay.hidden = false;
         updateAimHud();
@@ -1333,13 +1358,120 @@
         if (event.code === "KeyR") reload();
         if (event.code === "KeyG") addGrenade(false);
         if (event.code === "KeyF") addGrenade(true);
-        if (event.code === "KeyC") startSlide();
+        if (event.code === "KeyC") startDash();
         if (event.code.startsWith("Digit")) {
           const index = Number(event.code.slice(5)) - 1;
           selectWeapon(index);
         }
       });
       window.addEventListener("keyup", event => keys.delete(event.code));
+      const touchStick = document.querySelector("#touch-stick");
+      const touchStickKnob = document.querySelector("#touch-stick-knob");
+      touchStick.addEventListener("pointerdown", event => {
+        if (!running) return;
+        event.preventDefault();
+        touchStickPointerId = event.pointerId;
+        touchStick.setPointerCapture(event.pointerId);
+        updateTouchStick(event);
+      });
+      touchStick.addEventListener("pointermove", event => {
+        if (event.pointerId === touchStickPointerId) updateTouchStick(event);
+      });
+      function updateTouchStick(event) {
+        const bounds = touchStick.getBoundingClientRect();
+        const radius = bounds.width * .34;
+        const dx = event.clientX - (bounds.left + bounds.width / 2);
+        const dy = event.clientY - (bounds.top + bounds.height / 2);
+        const distance = Math.hypot(dx, dy);
+        const scale = distance > radius ? radius / distance : 1;
+        const x = dx * scale, y = dy * scale;
+        touchMovementX = x / radius;
+        touchMovementY = y / radius;
+        touchStickKnob.style.transform = `translate(calc(-50% + ${x}px), calc(-50% + ${y}px))`;
+      }
+      function releaseTouchStick(event) {
+        if (event.pointerId !== touchStickPointerId) return;
+        touchStickPointerId = null;
+        touchMovementX = 0;
+        touchMovementY = 0;
+        touchStickKnob.style.transform = "translate(-50%, -50%)";
+      }
+      touchStick.addEventListener("pointerup", releaseTouchStick);
+      touchStick.addEventListener("pointercancel", releaseTouchStick);
+
+      function bindTouchHold(button, onStart, onEnd) {
+        button.addEventListener("pointerdown", event => {
+          if (!running) return;
+          event.preventDefault();
+          button.setPointerCapture(event.pointerId);
+          button.classList.add("active");
+          onStart();
+        });
+        const release = () => {
+          button.classList.remove("active");
+          onEnd();
+        };
+        button.addEventListener("pointerup", release);
+        button.addEventListener("pointercancel", release);
+        button.addEventListener("lostpointercapture", release);
+      }
+      bindTouchHold(document.querySelector("#touch-fire"), () => {
+        firing = true;
+        shoot();
+      }, () => { firing = false; });
+      bindTouchHold(document.querySelector("#touch-aim"), () => {
+        aiming = true;
+        updateAimHud();
+      }, () => {
+        aiming = false;
+        updateAimHud();
+      });
+      bindTouchHold(document.querySelector("#touch-sprint"), () => keys.add("ShiftLeft"), () => keys.delete("ShiftLeft"));
+      document.querySelector("#touch-dash").addEventListener("pointerdown", event => {
+        if (!running) return;
+        event.preventDefault();
+        startDash();
+      });
+      document.querySelector("#touch-reload").addEventListener("pointerdown", event => {
+        if (!running) return;
+        event.preventDefault();
+        reload();
+      });
+      document.querySelector("#touch-swap").addEventListener("pointerdown", event => {
+        if (!running) return;
+        event.preventDefault();
+        selectWeapon((player.weaponIndex + 1) % weapons.length);
+      });
+      document.querySelector("#touch-frag").addEventListener("pointerdown", event => {
+        if (!running) return;
+        event.preventDefault();
+        addGrenade(false);
+      });
+      document.querySelector("#touch-flash").addEventListener("pointerdown", event => {
+        if (!running) return;
+        event.preventDefault();
+        addGrenade(true);
+      });
+      canvas.addEventListener("pointerdown", event => {
+        if (!running || event.pointerType === "mouse") return;
+        event.preventDefault();
+        lookPointerId = event.pointerId;
+        lastLookX = event.clientX;
+        canvas.setPointerCapture(event.pointerId);
+      });
+      canvas.addEventListener("pointermove", event => {
+        if (event.pointerId !== lookPointerId) return;
+        const deltaX = event.clientX - lastLookX;
+        lastLookX = event.clientX;
+        player.angle += deltaX * .006 * controlSettings.mouseSensitivity *
+          (aiming ? (currentWeapon().scoped ? controlSettings.scopeSensitivity : .66) : 1);
+        weaponLagX = Math.max(-18, Math.min(18, weaponLagX + deltaX * .12));
+      });
+      const releaseLook = event => {
+        if (event.pointerId === lookPointerId) lookPointerId = null;
+      };
+      canvas.addEventListener("pointerup", releaseLook);
+      canvas.addEventListener("pointercancel", releaseLook);
       canvas.addEventListener("mousedown", event => {
         if (!running) return;
         if (event.button === 2) {
@@ -1372,6 +1504,7 @@
         aiming = false;
         updateAimHud();
         keys.clear();
+        resetTouchControls();
       });
       window.addEventListener("mousemove", event => {
         if (running && (document.pointerLockElement === canvas || pointerLockUnavailable)) {
