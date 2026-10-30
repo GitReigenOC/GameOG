@@ -186,7 +186,13 @@
         { name: "COMPACT SMG", short: "SMG", magazine: 32, ammo: 32, reserve: 128, damage: 34, spread: .12, interval: .085, reloadTime: 1.1, range: 13, auto: true },
         { name: "COMBAT KNIFE", short: "KNIFE", magazine: 0, ammo: 0, reserve: 0, damage: 100, spread: .6, interval: .48, melee: true }
       ];
-      const weaponModelSources = [null, null, null, null, null];
+      const weaponModelSources = [
+        "assets/weapons/rifle.glb",
+        "assets/weapons/sniper.glb",
+        "assets/weapons/shotgun.glb",
+        "assets/weapons/smg.glb",
+        "assets/weapons/knife.glb"
+      ].map(path => new URL(path, document.baseURI).href);
 
       function weaponBox(parent, size, position, material, name) {
         const mesh = new THREE.Mesh(cachedBoxGeometry(...size), material);
@@ -953,7 +959,7 @@
         document.querySelector("#wave").textContent = isWaveMode()
           ? `WAVE ${String(wave).padStart(2, "0")}`
           : `MATCH ${String(wave).padStart(2, "0")}`;
-        const modeTitle = { waves: "hostiles in the area", coop: "local co-op demo hostiles", duel: "local duel opponent", ffa: "local free-for-all opponents", tdm: "2 local allies and 2 opposing bots" }[gameMode];
+        const modeTitle = { waves: "hostiles in the area", coop: "hostiles in the area", duel: "training opponent", ffa: "training opponents", tdm: "training opponents" }[gameMode];
         document.querySelector("#objective").textContent = `${count} ${modeTitle}`;
       }
 
@@ -1235,11 +1241,13 @@
         updateAimHud();
         document.querySelector("#overlay-kicker").textContent = gameMode === "waves"
           ? "SINGLE-PLAYER / SURVIVAL"
-          : `LOCAL MULTIPLAYER DEMO / ${gameMode.toUpperCase()}`;
+          : `${networkConnection?.open ? "PEER MATCH" : "BOT MATCH"} / ${gameMode.toUpperCase()}`;
         document.querySelector("#overlay-title").innerHTML = gameMode === "waves" ? "HOLD THE<br>PERIMETER" : "MATCH<br>IN PROGRESS";
         document.querySelector("#overlay-copy").textContent = gameMode === "waves"
           ? "Survive escalating hostile waves. Use WASD or the touch controls to move, aim and fire, and dash clear of danger."
-          : "Local bot match preview. Public/private rooms are mock lobbies and are not connected to the internet.";
+          : networkConnection?.open
+            ? "Player positions, health, weapons, and shots sync directly between peers. Training enemies are simulated locally."
+            : "Eliminate the training bots. Create or join a private peer room to connect with another player.";
         startButton.textContent = "Deploy";
         document.querySelector("#pause-button").textContent = "Pause";
         document.querySelector("#pause-button").disabled = false;
@@ -1286,7 +1294,7 @@
         document.querySelector("#overlay-title").innerHTML = isWaveMode() ? "PERIMETER<br>BREACHED" : "MATCH<br>COMPLETE";
         document.querySelector("#overlay-copy").textContent = isWaveMode()
           ? `You held for ${wave} wave${wave === 1 ? "" : "s"}. Reset and try again.`
-          : `${operatorName} finished the local ${gameMode.toUpperCase()} demo.`;
+          : `${operatorName} finished the ${gameMode.toUpperCase()} match.`;
         startButton.textContent = "Try again";
         returnMenuButton.hidden = false;
         document.querySelector("#pause-button").textContent = "Mission over";
