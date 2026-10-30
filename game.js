@@ -7,20 +7,22 @@
       const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
       renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
       renderer.shadowMap.enabled = true;
-      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      renderer.shadowMap.type = THREE.PCFShadowMap;
       renderer.outputEncoding = THREE.sRGBEncoding;
       renderer.toneMapping = THREE.ACESFilmicToneMapping;
       renderer.toneMappingExposure = 1.15;
       const scene = new THREE.Scene();
       scene.background = new THREE.Color("#111a17");
       scene.fog = new THREE.Fog("#202920", 12, 27);
-      const camera = new THREE.PerspectiveCamera(72, 16 / 9, .05, 80);
+      const camera = new THREE.PerspectiveCamera(72, 16 / 9, .1, 120);
+      camera.rotation.order = "YXZ";
       camera.position.set(7.5, 1.65, -7.5);
       scene.add(camera);
       const ambientLight = new THREE.AmbientLight("#bac7aa", 1.15);
       scene.add(ambientLight);
       const sunLight = new THREE.DirectionalLight("#f0e5c4", 2.2);
       sunLight.position.set(-5, 12, 7);
+      scene.add(sunLight.target);
       sunLight.castShadow = true;
       sunLight.shadow.mapSize.set(1024, 1024);
       sunLight.shadow.camera.left = -18;
@@ -33,6 +35,8 @@
       scene.add(sunLight);
       const staticMaterials = new Map();
       const staticGeometries = new Map();
+      const arenaTextures = new Map();
+      let poolWaterMaterial = null;
       const enemyModels = new Map();
       let remoteModel = null;
       let weaponAnchor = null;
@@ -53,7 +57,7 @@
       const profileModal = document.querySelector("#profile-modal");
       const settingsScreen = document.querySelector("#settings-screen");
       const menuScreens = [profileScreen, mainMenu, multiplayerMenu, serversMenu, profileModal, settingsScreen];
-      const map = [
+      const originalArena = [
         "1111111111111111",
         "1000000000000001",
         "1000110001100001",
@@ -71,13 +75,67 @@
         "1000000000000001",
         "1111111111111111"
       ];
-      const overheadLights = [
-        { x: 7.5, y: 6.5 },
-        { x: 2.5, y: 1.5 }, { x: 7.5, y: 1.5 }, { x: 12.5, y: 1.5 },
-        { x: 2.5, y: 4.5 }, { x: 7.5, y: 4.5 }, { x: 12.5, y: 4.5 },
-        { x: 2.5, y: 8.5 }, { x: 7.5, y: 8.5 }, { x: 12.5, y: 8.5 },
-        { x: 2.5, y: 12.5 }, { x: 7.5, y: 12.5 }, { x: 12.5, y: 12.5 }
-      ];
+      function createMapGrid(size) {
+        return Array.from({ length: size }, (_, y) =>
+          Array.from({ length: size }, (_, x) => x === 0 || y === 0 || x === size - 1 || y === size - 1 ? "1" : "0"));
+      }
+      function createBattlefield() {
+        const grid = createMapGrid(36);
+        for (let x = 5; x < 31; x++) {
+          if (x < 11 || x > 14) grid[8][x] = "1";
+          if (x < 21 || x > 24) grid[27][x] = "1";
+        }
+        for (let y = 5; y < 31; y++) {
+          if (y < 13 || y > 16) grid[y][12] = "1";
+          if (y < 20 || y > 23) grid[y][23] = "1";
+        }
+        [[6, 6], [7, 6], [28, 6], [29, 6], [6, 29], [7, 29], [28, 29], [29, 29],
+          [17, 5], [18, 5], [17, 30], [18, 30], [5, 18], [30, 18]].forEach(([x, y]) => { grid[y][x] = "1"; });
+        return grid.map(row => row.join(""));
+      }
+      function createPoolRooms() {
+        const grid = createMapGrid(32);
+        for (let x = 3; x < 29; x++) {
+          if (x !== 7 && x !== 8 && x !== 21 && x !== 22) grid[6][x] = "1";
+          if (x !== 13 && x !== 14 && x !== 25 && x !== 26) grid[13][x] = "1";
+          if (x !== 5 && x !== 6 && x !== 18 && x !== 19) grid[21][x] = "1";
+          if (x !== 10 && x !== 11 && x !== 24 && x !== 25) grid[27][x] = "1";
+        }
+        for (let y = 3; y < 29; y++) {
+          if (y !== 10 && y !== 11 && y !== 23 && y !== 24) grid[y][9] = "1";
+          if (y !== 4 && y !== 5 && y !== 17 && y !== 18) grid[y][17] = "1";
+          if (y !== 8 && y !== 9 && y !== 25 && y !== 26) grid[y][24] = "1";
+        }
+        grid[16][16] = "0";
+        return grid.map(row => row.join(""));
+      }
+      const mapDefinitions = {
+        arena: {
+          name: "Tactical Arena", grid: originalArena, spawn: { x: 7.5, y: 7.5 },
+          outdoor: false, floor: "#30372f", floorLine: "#41483e", wall: "#555d50", wallLine: "#424a3f",
+          ceiling: "#353c34", fog: "#202920", background: "#111a17", ambient: "#bac7aa", ambientPower: 1.15,
+          sun: "#f0e5c4", sunPower: 2.2, floorRoughness: .8, wallRoughness: .88, lightColor: "#d3dbac"
+        },
+        battlefield: {
+          name: "Battlefield", grid: createBattlefield(), spawn: { x: 18.5, y: 18.5 },
+          outdoor: true, floor: "#51483a", floorLine: "#675943", wall: "#716552", wallLine: "#443f36",
+          ceiling: "#252a29", fog: "#756d60", background: "#526b78", ambient: "#91a7a5", ambientPower: .8,
+          sun: "#ffd29a", sunPower: 2.7, floorRoughness: .96, wallRoughness: .93, lightColor: "#ffb979"
+        },
+        pool: {
+          name: "The Pool Rooms", grid: createPoolRooms(), spawn: { x: 15.5, y: 15.5 },
+          outdoor: false, floor: "#397f80", floorLine: "#1d5d62", wall: "#abd8d0", wallLine: "#5daaa5",
+          ceiling: "#397a79", fog: "#397c7f", background: "#16464e", ambient: "#9ce9e5", ambientPower: .82,
+          sun: "#8df5f0", sunPower: .62, floorRoughness: .14, wallRoughness: .34, lightColor: "#56e9ef"
+        }
+      };
+      let activeMapId = "arena";
+      let selectedMapId = "arena";
+      let map = mapDefinitions[activeMapId].grid;
+      let mapGroup = null;
+      let dynamicMapLights = [];
+      let animatedMapProps = [];
+      let playerPitch = 0;
       function cachedMaterial(key, color, options = {}) {
         if (!staticMaterials.has(key)) {
           staticMaterials.set(key, new THREE.MeshStandardMaterial({
@@ -93,6 +151,19 @@
         const key = `${width}:${height}:${depth}`;
         if (!staticGeometries.has(key)) staticGeometries.set(key, new THREE.BoxGeometry(width, height, depth));
         return staticGeometries.get(key);
+      }
+
+      function cachedPlaneGeometry(width, height) {
+        const key = `plane:${width}:${height}`;
+        if (!staticGeometries.has(key)) staticGeometries.set(key, new THREE.PlaneGeometry(width, height));
+        return staticGeometries.get(key);
+      }
+
+      function cachedArenaTexture(key, baseColor, lineColor, repeatX, repeatY) {
+        if (!arenaTextures.has(key)) {
+          arenaTextures.set(key, createArenaTexture(baseColor, lineColor, repeatX, repeatY));
+        }
+        return arenaTextures.get(key);
       }
 
       function createArenaTexture(baseColor, lineColor, repeatX, repeatY) {
@@ -119,32 +190,41 @@
           textureContext.fillRect(x, y, 2 + i % 5, 2);
         }
         const texture = new THREE.CanvasTexture(textureCanvas);
+        texture.encoding = THREE.sRGBEncoding;
         texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
         texture.repeat.set(repeatX, repeatY);
         texture.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
         return texture;
       }
 
-      function buildArena() {
-        const floorTexture = createArenaTexture("#30372f", "#41483e", 16, 16);
-        const wallTexture = createArenaTexture("#555d50", "#424a3f", 2, 2);
-        const floorMaterial = cachedMaterial("floor", "#aab09c", { map: floorTexture });
-        const wallMaterial = cachedMaterial("wall", "#aab09c", { map: wallTexture });
-        const ceilingMaterial = cachedMaterial("ceiling", "#353c34");
-        const floor = new THREE.Mesh(new THREE.PlaneGeometry(16, 16), floorMaterial);
-        floor.rotation.x = -Math.PI / 2;
-        floor.position.set(8, 0, -8);
+      function buildArena(mapId) {
+        const definition = mapDefinitions[mapId];
+        const width = map[0].length, depth = map.length;
+        animatedMapProps = [];
+        dynamicMapLights = [];
+        const floorTexture = cachedArenaTexture(`${mapId}-floor`, definition.floor, definition.floorLine, width, depth);
+        const wallTexture = cachedArenaTexture(`${mapId}-wall`, definition.wall, definition.wallLine, 2, 2);
+        const floorMaterial = cachedMaterial(`${mapId}-floor`, "#ffffff", {
+          map: floorTexture, roughness: definition.floorRoughness, metalness: mapId === "pool" ? .16 : 0
+        });
+        const wallMaterial = cachedMaterial(`${mapId}-wall`, "#ffffff", {
+          map: wallTexture, roughness: definition.wallRoughness, metalness: mapId === "battlefield" ? .18 : 0
+        });
+        const floor = new THREE.Mesh(cachedBoxGeometry(width, .08, depth), floorMaterial);
+        floor.position.set(width / 2, -.06, -depth / 2);
         floor.receiveShadow = true;
-        floor.frustumCulled = true;
-        scene.add(floor);
-        const ceiling = new THREE.Mesh(new THREE.PlaneGeometry(16, 16), ceilingMaterial);
-        ceiling.rotation.x = Math.PI / 2;
-        ceiling.position.set(8, 4, -8);
-        ceiling.frustumCulled = true;
-        scene.add(ceiling);
+        mapGroup.add(floor);
+
+        if (!definition.outdoor) {
+          const ceiling = new THREE.Mesh(cachedBoxGeometry(width, .08, depth),
+            cachedMaterial(`${mapId}-ceiling`, definition.ceiling, { roughness: .92 }));
+          ceiling.position.set(width / 2, 4.04, -depth / 2);
+          ceiling.frustumCulled = true;
+          mapGroup.add(ceiling);
+        }
 
         const wallCount = map.reduce((total, row) => total + [...row].filter(cell => cell === "1").length, 0);
-        const walls = new THREE.InstancedMesh(cachedBoxGeometry(1, 4, 1), wallMaterial, wallCount);
+        const walls = new THREE.InstancedMesh(cachedBoxGeometry(1, 1, 1), wallMaterial, wallCount);
         walls.castShadow = true;
         walls.receiveShadow = true;
         walls.frustumCulled = true;
@@ -152,32 +232,132 @@
         let wallIndex = 0;
         map.forEach((row, mapY) => [...row].forEach((cell, mapX) => {
           if (cell !== "1") return;
-          transform.position.set(mapX + .5, 2, -mapY - .5);
+          const edge = mapX === 0 || mapY === 0 || mapX === width - 1 || mapY === depth - 1;
+          const height = definition.outdoor ? (edge ? 3.2 : .95 + ((mapX * 7 + mapY * 3) % 4) * .22) : 4;
+          transform.position.set(mapX + .5, height / 2, -mapY - .5);
+          transform.scale.set(1, height, 1);
           transform.updateMatrix();
           walls.setMatrixAt(wallIndex++, transform.matrix);
         }));
         walls.instanceMatrix.needsUpdate = true;
-        scene.add(walls);
+        mapGroup.add(walls);
 
-        const fixtureMaterial = cachedMaterial("light-fixture", "#242a23", { metalness: .48 });
-        const glowMaterial = cachedMaterial("light-glow", "#d9dfa9", { emissive: "#c5d58b", emissiveIntensity: 1.2 });
-        overheadLights.forEach(({ x, y }, index) => {
-          const fixture = new THREE.Mesh(cachedBoxGeometry(.9, .08, .28), fixtureMaterial);
-          fixture.position.set(x, 3.92, -y);
-          fixture.frustumCulled = true;
-          scene.add(fixture);
-          const diffuser = new THREE.Mesh(cachedBoxGeometry(.72, .035, .17), glowMaterial);
-          diffuser.position.set(x, 3.86, -y);
-          diffuser.frustumCulled = true;
-          scene.add(diffuser);
-          const light = new THREE.PointLight("#d3dbac", index === 0 ? 2.2 : 1.25, 7, 2);
-          light.position.set(x, 3.55, -y);
-          light.castShadow = false;
-          scene.add(light);
+        if (mapId === "battlefield") {
+          const debrisMaterial = cachedMaterial("battlefield-debris", "#b08b5e", { roughness: .97, metalness: .08 });
+          const debris = new THREE.InstancedMesh(cachedBoxGeometry(.44, .24, .38), debrisMaterial, 32);
+          let debrisIndex = 0;
+          for (let y = 3; y < depth - 3 && debrisIndex < 32; y += 4) {
+            for (let x = 3; x < width - 3 && debrisIndex < 32; x += 5) {
+              if (wallAt(x + .5, y + .5)) continue;
+              transform.position.set(x + .5, .08, -y - .5);
+              transform.rotation.set(0, ((x * 13 + y * 5) % 8) * Math.PI / 16, 0);
+              transform.scale.set(1 + (x % 3) * .35, 1, 1 + (y % 2) * .3);
+              transform.updateMatrix();
+              debris.setMatrixAt(debrisIndex++, transform.matrix);
+            }
+          }
+          debris.count = debrisIndex;
+          debris.instanceMatrix.needsUpdate = true;
+          debris.frustumCulled = true;
+          mapGroup.add(debris);
+          [[4, 14], [30, 14], [4, 21], [30, 21], [20, 4], [25, 31]].forEach(([x, y], index) => {
+            if (wallAt(x + .5, y + .5)) return;
+            const fragment = new THREE.Mesh(cachedBoxGeometry(.48, .16, .32), debrisMaterial);
+            fragment.position.set(x + .5, .28 + (index % 2) * .12, -y - .5);
+            fragment.rotation.set(index * .17, index * .43, index * .11);
+            fragment.userData.baseY = fragment.position.y;
+            fragment.userData.phase = index * 1.7;
+            fragment.frustumCulled = true;
+            mapGroup.add(fragment);
+            animatedMapProps.push(fragment);
+          });
+        }
+
+        if (mapId === "pool") {
+          if (!poolWaterMaterial) {
+            poolWaterMaterial = new THREE.MeshStandardMaterial({
+              color: "#3ce5dc", roughness: .16, metalness: .18, transparent: true, opacity: .76,
+              emissive: "#087f88", emissiveIntensity: .34
+            });
+          }
+          [[4, 3], [12, 8], [20, 15], [4, 23], [25, 24]].forEach(([x, y]) => {
+            const water = new THREE.Mesh(cachedPlaneGeometry(3.2, 2.4), poolWaterMaterial);
+            water.rotation.x = -Math.PI / 2;
+            water.position.set(x + 1.6, .015, -(y + 1.2));
+            water.frustumCulled = true;
+            mapGroup.add(water);
+          });
+        }
+
+        const fixtureMaterial = cachedMaterial(`${mapId}-fixture`, definition.outdoor ? "#45443b" : "#242a23", {
+          metalness: .48, roughness: .42
         });
+        const glowMaterial = cachedMaterial(`${mapId}-glow`, definition.lightColor, {
+          emissive: definition.lightColor, emissiveIntensity: mapId === "pool" ? 1.7 : 1.2
+        });
+        let lightIndex = 0;
+        const step = mapId === "arena" ? 3 : 7;
+        for (let y = 2; y < depth - 1 && lightIndex < 10; y += step) {
+          for (let x = 2; x < width - 1 && lightIndex < 10; x += step) {
+            const height = definition.outdoor ? 2.6 : 3.92;
+            const fixture = new THREE.Mesh(cachedBoxGeometry(.9, .08, .28), fixtureMaterial);
+            fixture.position.set(x + .5, height, -y - .5);
+            mapGroup.add(fixture);
+            const diffuser = new THREE.Mesh(cachedBoxGeometry(.72, .035, .17), glowMaterial);
+            diffuser.position.set(x + .5, height - .06, -y - .5);
+            mapGroup.add(diffuser);
+            const light = new THREE.PointLight(definition.lightColor,
+              mapId === "arena" && lightIndex === 0 ? 2.2 : mapId === "pool" ? 1.05 : 1.25,
+              mapId === "battlefield" ? 10 : 8, 2);
+            light.position.set(x + .5, height - .35, -y - .5);
+            light.userData.flicker = mapId === "pool" || mapId === "battlefield";
+            light.userData.baseIntensity = light.intensity;
+            mapGroup.add(light);
+            if (light.userData.flicker) dynamicMapLights.push(light);
+            lightIndex++;
+          }
+        }
+        if (mapId !== "arena") {
+          [[width * .28, mapId === "pool" ? "#42e8ef" : "#ffd08b"],
+            [width * .72, mapId === "pool" ? "#70baff" : "#ff885b"]].forEach(([x, color], index) => {
+            const spot = new THREE.SpotLight(color, mapId === "pool" ? 1.15 : 2.2, 24, .52, .45, 1.4);
+            spot.position.set(x, definition.outdoor ? 7 : 3.8, -depth * (index ? .72 : .28));
+            spot.target.position.set(x + (index ? -3 : 3), 0, -depth / 2);
+            spot.castShadow = false;
+            mapGroup.add(spot, spot.target);
+          });
+        }
       }
 
-      buildArena();
+      function loadMap(mapId) {
+        if (!mapDefinitions[mapId]) return;
+        activeMapId = mapId;
+        map = mapDefinitions[mapId].grid;
+        if (mapGroup) scene.remove(mapGroup);
+        mapGroup = new THREE.Group();
+        mapGroup.name = `map-${mapId}`;
+        scene.add(mapGroup);
+        const definition = mapDefinitions[mapId];
+        scene.background = new THREE.Color(definition.background);
+        scene.fog = new THREE.Fog(definition.fog, 12, mapId === "battlefield" ? 42 : 34);
+        sunLight.target.position.set(map[0].length / 2, 0, -map.length / 2);
+        sunLight.position.set(map[0].length / 2 - 5, 12, -map.length / 2 + 7);
+        sunLight.shadow.camera.left = -map[0].length * .65;
+        sunLight.shadow.camera.right = map[0].length * .65;
+        sunLight.shadow.camera.top = map.length * .65;
+        sunLight.shadow.camera.bottom = -map.length * .65;
+        sunLight.shadow.camera.far = Math.max(35, map.length * 2);
+        sunLight.shadow.camera.updateProjectionMatrix();
+        ambientLight.color.set(definition.ambient);
+        ambientLight.intensity = definition.ambientPower;
+        sunLight.color.set(definition.sun);
+        sunLight.intensity = definition.sunPower;
+        const sectorName = document.querySelector("#sector-name");
+        if (sectorName) sectorName.textContent = `${definition.name.toUpperCase()} / NIGHTFALL`;
+        buildArena(mapId);
+      }
+
+      loadMap(activeMapId);
 
       const weapons = [
         { name: "ASSAULT RIFLE", short: "RIFLE", magazine: 30, ammo: 30, reserve: 90, damage: 50, spread: .075, interval: .18, reloadTime: 1.15, range: 18, auto: true },
@@ -293,7 +473,10 @@
           });
         });
       }
-      const player = { x: 7.5, y: 7.5, angle: -Math.PI / 2, health: 100, weaponIndex: 0, score: 0 };
+      const player = {
+        x: mapDefinitions[activeMapId].spawn.x, y: mapDefinitions[activeMapId].spawn.y,
+        angle: -Math.PI / 2, health: 100, weaponIndex: 0, score: 0
+      };
       initializeWeapons();
       const weaponWeight = [1, 1.9, 1.45, .78, .5];
       const keys = new Set();
@@ -306,7 +489,7 @@
       let weaponRecoil = 0, weaponLagX = 0, dashTimer = 0, dashCooldown = 0;
       let dashDirectionX = 0, dashDirectionY = 0;
       const dashDuration = .38;
-      let touchMovementX = 0, touchMovementY = 0, lookPointerId = null, lastLookX = 0;
+      let touchMovementX = 0, touchMovementY = 0, lookPointerId = null, lastLookX = 0, lastLookY = 0;
       let touchStickPointerId = null;
       let grenadeCooldown = 0, flashbangCooldown = 0, grenadeAnimation = 0, flashbangAnimation = 0;
       let grenades = 2, flashbangs = 1;
@@ -509,13 +692,23 @@
 
       function sendPlayerState() {
         if (!networkConnection?.open) return;
+        const horizontalLook = Math.cos(playerPitch);
         sendPeerMessage({
           type: "state",
           x: player.x,
           y: player.y,
+          position: { x: player.x, y: 1.65 - (dashTimer > 0 ? .22 : 0), z: -player.y },
           angle: player.angle,
+          pitch: playerPitch,
+          cameraDirection: {
+            x: Math.cos(player.angle) * horizontalLook,
+            y: Math.sin(playerPitch),
+            z: -Math.sin(player.angle) * horizontalLook
+          },
           health: player.health,
-          weapon: player.weaponIndex
+          weapon: player.weaponIndex,
+          mapId: activeMapId,
+          firing
         });
       }
 
@@ -526,14 +719,16 @@
         remotePlayer = null;
       }
 
-      function applyRemoteShot(angle, weaponIndex) {
+      function applyRemoteShot(angle, pitch, weaponIndex) {
         if (!remotePlayer) return;
         const weapon = weapons[weaponIndex];
         const dx = player.x - remotePlayer.x;
         const dy = player.y - remotePlayer.y;
         const along = dx * Math.cos(angle) + dy * Math.sin(angle);
         const perpendicular = Math.abs(dx * Math.sin(angle) - dy * Math.cos(angle));
+        const shotHeight = 1.25 + Math.tan(pitch) * along;
         if (along <= 0 || along > (weapon.range || 1.8) || perpendicular > .34 ||
+          Math.abs(shotHeight - 1.05) > .85 ||
           castRayFrom(remotePlayer.x, remotePlayer.y, angle).distance < along - .2) return;
         player.health = Math.max(0, player.health - weapon.damage);
         document.querySelector("#health").textContent = player.health;
@@ -551,19 +746,45 @@
         if (!data || typeof data !== "object") return;
         if (data.type === "state" && Number.isFinite(data.x) && Number.isFinite(data.y) &&
           Number.isFinite(data.angle) && Number.isFinite(data.health) && Number.isInteger(data.weapon) &&
-          data.x >= 0 && data.x < 16 && data.y >= 0 && data.y < 16 &&
+          data.position && Number.isFinite(data.position.x) && Number.isFinite(data.position.y) &&
+          Number.isFinite(data.position.z) && data.cameraDirection &&
+          Number.isFinite(data.cameraDirection.x) && Number.isFinite(data.cameraDirection.y) &&
+          Number.isFinite(data.cameraDirection.z) &&
+          typeof data.mapId === "string" && mapDefinitions[data.mapId] &&
+          Number.isFinite(data.pitch) && typeof data.firing === "boolean" &&
           data.health >= 0 && data.health <= 100 && data.weapon >= 0 && data.weapon < weapons.length) {
+          if (networkRole === "host" && data.mapId !== activeMapId) {
+            sendPlayerState();
+            return;
+          }
+          if (networkRole !== "host" && activeMapId !== data.mapId) {
+            loadMap(data.mapId);
+            selectedMapId = data.mapId;
+            player.x = mapDefinitions[data.mapId].spawn.x;
+            player.y = mapDefinitions[data.mapId].spawn.y;
+          }
+          const remoteMap = mapDefinitions[data.mapId].grid;
+          const remoteX = data.position.x;
+          const remoteY = -data.position.z;
+          if (remoteX < 0 || remoteY < 0 || remoteY >= remoteMap.length ||
+            remoteX >= remoteMap[0].length || remoteMap[Math.floor(remoteY)][Math.floor(remoteX)] !== "0") return;
           remotePlayer = {
-            x: data.x, y: data.y, angle: data.angle,
-            health: data.health, weapon: data.weapon
+            x: remoteX, y: remoteY, angle: data.angle,
+            cameraDirection: data.cameraDirection,
+            pitch: Math.max(-1.35, Math.min(1.35, data.pitch)),
+            health: data.health, weapon: data.weapon, firing: data.firing
           };
           return;
         }
-        if (data.type === "shot" && Number.isFinite(data.angle) &&
+        if (data.type === "shot" && Number.isFinite(data.angle) && Number.isFinite(data.pitch) &&
           Number.isInteger(data.weapon) && data.weapon >= 0 && data.weapon < weapons.length) {
           if (remotePlayer) {
             const origin = new THREE.Vector3(remotePlayer.x, 1.25, -remotePlayer.y);
-            const direction = new THREE.Vector3(Math.cos(data.angle), 0, -Math.sin(data.angle));
+            const direction = new THREE.Vector3(
+              Math.cos(data.angle) * Math.cos(data.pitch),
+              Math.sin(data.pitch),
+              -Math.sin(data.angle) * Math.cos(data.pitch)
+            );
             const geometry = new THREE.BufferGeometry().setFromPoints([origin, origin.clone().addScaledVector(direction, 5)]);
             const material = new THREE.LineBasicMaterial({ color: "#f4d57a", transparent: true, opacity: .8 });
             const tracer = new THREE.Line(geometry, material);
@@ -575,7 +796,7 @@
               material.dispose();
             }, 100);
           }
-          applyRemoteShot(data.angle, data.weapon);
+          applyRemoteShot(data.angle, data.pitch, data.weapon);
         }
       }
 
@@ -797,6 +1018,7 @@
 
       function resize() {
         const bounds = canvas.getBoundingClientRect();
+        if (!bounds.width || !bounds.height) return;
         const pixelRatio = Math.min(window.devicePixelRatio || 1, 1.5);
         renderer.setPixelRatio(pixelRatio);
         renderer.setSize(bounds.width, bounds.height, false);
@@ -806,13 +1028,22 @@
 
       function wallAt(x, y) {
         const mx = Math.floor(x), my = Math.floor(y);
-        return my < 0 || mx < 0 || my >= map.length || mx >= map[0].length || map[my][mx] === "1";
+        return my < 0 || mx < 0 || my >= map.length || mx >= map[my].length || map[my][mx] === "1";
+      }
+
+      function canOccupy(x, y, radius) {
+        return !wallAt(x - radius, y - radius) && !wallAt(x + radius, y - radius) &&
+          !wallAt(x - radius, y + radius) && !wallAt(x + radius, y + radius);
       }
 
       function movePlayer(dx, dy) {
-        const radius = .22;
-        if (!wallAt(player.x + dx + Math.sign(dx) * radius, player.y)) player.x += dx;
-        if (!wallAt(player.x, player.y + dy + Math.sign(dy) * radius)) player.y += dy;
+        const radius = .24;
+        const steps = Math.max(1, Math.ceil(Math.max(Math.abs(dx), Math.abs(dy)) / .1));
+        const stepX = dx / steps, stepY = dy / steps;
+        for (let step = 0; step < steps; step++) {
+          if (canOccupy(player.x + stepX, player.y, radius)) player.x += stepX;
+          if (canOccupy(player.x, player.y + stepY, radius)) player.y += stepY;
+        }
       }
 
       function movementInput() {
@@ -924,6 +1155,12 @@
         addPart(staticGeometries.get(headGeometryKey), armor, [0, 1.62, 0]);
         addPart(cachedBoxGeometry(.54, .22, .34), armor, [0, 1.22, 0]);
         addPart(cachedBoxGeometry(.3, .035, .035), marker, [0, 1.64, -.18]);
+        const weaponMaterial = cachedMaterial("remote-weapon", "#202522", { metalness: .72, roughness: .38 });
+        addPart(cachedBoxGeometry(.12, .12, .52), weaponMaterial, [.3, 1.12, -.3]);
+        const muzzle = new THREE.PointLight("#ffb65c", 0, 2.5, 2);
+        muzzle.position.set(.3, 1.12, -.62);
+        remoteModel.add(muzzle);
+        remoteModel.userData.muzzleLight = muzzle;
         scene.add(remoteModel);
         return remoteModel;
       }
@@ -937,6 +1174,7 @@
         model.visible = true;
         model.position.set(remotePlayer.x, 0, -remotePlayer.y);
         model.rotation.y = remotePlayer.angle - Math.PI / 2;
+        model.userData.muzzleLight.intensity = remotePlayer.firing ? .75 : 0;
       }
 
       function spawnWave() {
@@ -946,8 +1184,8 @@
         for (let i = 0; i < count; i++) {
           let x, y, tries = 0;
           do {
-            x = 1.5 + Math.random() * 13;
-            y = 1.5 + Math.random() * 13;
+            x = 1.5 + Math.random() * (map[0].length - 3);
+            y = 1.5 + Math.random() * (map.length - 3);
             tries++;
           } while ((wallAt(x, y) || Math.hypot(x - player.x, y - player.y) < 4) && tries < 100);
           enemies.push({
@@ -991,7 +1229,15 @@
         updateEnemyModels();
         updateRemoteModel();
         camera.position.set(player.x, 1.65 - (dashTimer > 0 ? .22 : 0), -player.y);
-        camera.rotation.set(0, player.angle - Math.PI / 2, 0);
+        camera.rotation.set(playerPitch, player.angle - Math.PI / 2, 0);
+        const flickerTime = performance.now() * .004;
+        dynamicMapLights.forEach((light, index) => {
+          light.intensity = light.userData.baseIntensity * (.82 + Math.sin(flickerTime + index * 2.1) * .18);
+        });
+        animatedMapProps.forEach((prop, index) => {
+          prop.rotation.y += .004 * (index % 2 ? -1 : 1);
+          prop.position.y = prop.userData.baseY + Math.sin(flickerTime * .25 + prop.userData.phase) * .05;
+        });
         camera.fov = aiming ? (currentWeapon().scoped ? 36 : 64) : 72;
         camera.updateProjectionMatrix();
         if (weaponAnchor) {
@@ -1043,7 +1289,7 @@
           reloadDuration = weapon.chamberTime;
           reloadKind = "chamber";
         }
-        sendPeerMessage({ type: "shot", weapon: player.weaponIndex, angle: player.angle });
+        sendPeerMessage({ type: "shot", weapon: player.weaponIndex, angle: player.angle, pitch: playerPitch });
         const pelletCount = weapon.melee ? 7 : weapon.pellets || 1;
         const hits = new Map();
         for (let pellet = 0; pellet < pelletCount; pellet++) {
@@ -1055,7 +1301,11 @@
             .map(enemy => enemyModels.get(enemy) || createEnemyModel(enemy));
           raycaster.set(
             camera.position,
-            new THREE.Vector3(Math.cos(shotAngle), 0, -Math.sin(shotAngle)).normalize()
+            new THREE.Vector3(
+              Math.cos(shotAngle) * Math.cos(playerPitch),
+              Math.sin(playerPitch),
+              -Math.sin(shotAngle) * Math.cos(playerPitch)
+            ).normalize()
           );
           raycaster.near = 0;
           raycaster.far = Math.max(0, maxDistance);
@@ -1091,8 +1341,8 @@
         const { forward, strafe } = movementInput();
         const length = Math.hypot(forward, strafe);
         if (!running || aiming || dashTimer > 0 || dashCooldown > 0 || length === 0) return;
-        dashDirectionX = (Math.cos(player.angle) * forward + Math.cos(player.angle + Math.PI / 2) * strafe) / length;
-        dashDirectionY = (Math.sin(player.angle) * forward + Math.sin(player.angle + Math.PI / 2) * strafe) / length;
+        dashDirectionX = (Math.cos(player.angle) * forward + Math.cos(player.angle - Math.PI / 2) * strafe) / length;
+        dashDirectionY = (Math.sin(player.angle) * forward + Math.sin(player.angle - Math.PI / 2) * strafe) / length;
         dashTimer = dashDuration;
         dashCooldown = .9;
         setCombatMessage("DASH", 500);
@@ -1151,8 +1401,8 @@
           movePlayer(dashDirectionX * dashSpeed * dt, dashDirectionY * dashSpeed * dt);
         } else {
           const speed = (aiming ? 2 : sprinting ? 4.2 : 3.2) * dt;
-          movePlayer((Math.cos(player.angle) * forward + Math.cos(player.angle + Math.PI / 2) * strafe) / length * speed,
-            (Math.sin(player.angle) * forward + Math.sin(player.angle + Math.PI / 2) * strafe) / length * speed);
+          movePlayer((Math.cos(player.angle) * forward + Math.cos(player.angle - Math.PI / 2) * strafe) / length * speed,
+            (Math.sin(player.angle) * forward + Math.sin(player.angle - Math.PI / 2) * strafe) / length * speed);
         }
 
         for (const enemy of enemies) {
@@ -1203,7 +1453,11 @@
       function startGame(requestedMode = gameMode, fresh = gameOver) {
         if (fresh || gameOver) {
           gameMode = requestedMode;
-          player.x = 7.5; player.y = 7.5; player.angle = -Math.PI / 2;
+          if (activeMapId !== selectedMapId) loadMap(selectedMapId);
+          player.x = mapDefinitions[activeMapId].spawn.x;
+          player.y = mapDefinitions[activeMapId].spawn.y;
+          player.angle = -Math.PI / 2;
+          playerPitch = 0;
           player.health = 100; player.score = 0;
           weapons.forEach((weapon, index) => {
             const ammo = [30, 5, 8, 32, 0][index];
@@ -1343,6 +1597,16 @@
         button.addEventListener("click", () => {
           selectedMode = button.dataset.mode;
           document.querySelectorAll(".mode-card").forEach(card => card.classList.toggle("selected", card === button));
+        });
+      });
+      document.querySelectorAll(".map-card").forEach(button => {
+        button.addEventListener("click", () => {
+          selectedMapId = button.dataset.map;
+          document.querySelectorAll(".map-card").forEach(card => {
+            const selected = card === button;
+            card.classList.toggle("selected", selected);
+            card.setAttribute("aria-pressed", String(selected));
+          });
         });
       });
       document.querySelector("#public-servers-button").addEventListener("click", openServerBrowser);
@@ -1491,14 +1755,19 @@
         event.preventDefault();
         lookPointerId = event.pointerId;
         lastLookX = event.clientX;
+        lastLookY = event.clientY;
         canvas.setPointerCapture(event.pointerId);
       });
       canvas.addEventListener("pointermove", event => {
         if (event.pointerId !== lookPointerId) return;
         const deltaX = event.clientX - lastLookX;
+        const deltaY = event.clientY - lastLookY;
         lastLookX = event.clientX;
-        player.angle += deltaX * .006 * controlSettings.mouseSensitivity *
+        lastLookY = event.clientY;
+        const sensitivity = .006 * controlSettings.mouseSensitivity *
           (aiming ? (currentWeapon().scoped ? controlSettings.scopeSensitivity : .66) : 1);
+        player.angle -= deltaX * sensitivity;
+        playerPitch = Math.max(-1.35, Math.min(1.35, playerPitch - deltaY * sensitivity));
         weaponLagX = Math.max(-18, Math.min(18, weaponLagX + deltaX * .12));
       });
       const releaseLook = event => {
@@ -1544,7 +1813,8 @@
         if (running && (document.pointerLockElement === canvas || pointerLockUnavailable)) {
           const sensitivity = .0025 * controlSettings.mouseSensitivity *
             (aiming ? (currentWeapon().scoped ? controlSettings.scopeSensitivity : .66) : 1);
-          player.angle += event.movementX * sensitivity;
+          player.angle -= event.movementX * sensitivity;
+          playerPitch = Math.max(-1.35, Math.min(1.35, playerPitch - event.movementY * sensitivity));
           weaponLagX = Math.max(-18, Math.min(18, weaponLagX + event.movementX * .12));
         }
       });

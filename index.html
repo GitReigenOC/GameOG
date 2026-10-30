@@ -12,7 +12,7 @@ description: A browser-based tactical arena training game.
       <div class="hud" aria-live="polite">
         <div class="hud-column">
           <div>
-            <div class="eyebrow">Sector 07 / Nightfall</div>
+            <div class="eyebrow" id="sector-name">TACTICAL ARENA / NIGHTFALL</div>
             <div class="wave" id="wave">WAVE 01</div>
             <div class="objective" id="objective">Clear the hostile forces</div>
           </div>
@@ -85,6 +85,17 @@ description: A browser-based tactical arena training game.
           <div class="kicker">BLACKSITE / TRAINING SIMULATION</div>
           <h1>CHOOSE YOUR<br>MISSION</h1>
           <p>Signed in locally as <strong id="menu-username">Operator</strong></p>
+          <div class="map-grid" aria-label="Select a map">
+            <button type="button" class="map-card selected" data-map="arena" aria-pressed="true">
+              <strong>TACTICAL ARENA</strong><span>Close-quarters training complex.</span>
+            </button>
+            <button type="button" class="map-card" data-map="battlefield" aria-pressed="false">
+              <strong>BATTLEFIELD</strong><span>Outdoor combat zone with trenches and debris.</span>
+            </button>
+            <button type="button" class="map-card" data-map="pool" aria-pressed="false">
+              <strong>THE POOL ROOMS</strong><span>A tiled maze of glowing cyan water.</span>
+            </button>
+          </div>
           <div class="menu-actions">
             <button type="button" id="solo-button">Play solo</button>
             <button type="button" id="multiplayer-button" class="button-secondary">Multiplayer</button>
@@ -153,9 +164,9 @@ description: A browser-based tactical arena training game.
         <div class="menu-panel settings-panel">
           <div class="kicker">CONTROL SETTINGS / SAVED LOCALLY</div>
           <h1>LOOK<br>SENSITIVITY</h1>
-          <p>Adjust mouse turn speed. Scoped sensitivity is a multiplier of your normal sensitivity.</p>
+          <p>Adjust mouse and touch look speed. Scoped sensitivity is a multiplier of your normal sensitivity.</p>
           <label class="setting-row" for="sensitivity-setting">
-            <span>Mouse sensitivity <output id="sensitivity-value" for="sensitivity-setting">1.00×</output></span>
+            <span>Look sensitivity <output id="sensitivity-value" for="sensitivity-setting">1.00×</output></span>
             <input id="sensitivity-setting" type="range" min="0.2" max="3" step="0.05" value="1">
             <span class="setting-hint">Lower for finer aim · Higher for quicker turns</span>
           </label>

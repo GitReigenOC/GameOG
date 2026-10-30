@@ -209,6 +209,21 @@
     .form-error { min-height: 17px; margin-top: 6px; color: #ef9b7c; font-size: 11px; }
     .menu-actions { display: grid; gap: 8px; margin-top: 14px; }
     .menu-actions button { width: 100%; margin-top: 0; }
+    .map-grid {
+      display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px;
+      margin-top: 16px;
+    }
+    .map-card {
+      display: flex; flex-direction: column; gap: 6px; min-height: 78px; margin: 0; padding: 10px;
+      border: 1px solid #53604e; background: #18201b; color: #e4e9dc; text-align: left;
+      font-size: 9px; letter-spacing: .08em;
+    }
+    .map-card span {
+      color: #aab4a4; font-size: 9px; font-weight: 400; line-height: 1.4;
+      letter-spacing: 0; text-transform: none;
+    }
+    .map-card.selected { border-color: #c1e16d; background: #28351f; color: #d3ef87; }
+    .map-card:hover { background: #303b2e; }
     button.button-secondary { border: 1px solid #67715f; background: #232c24; color: #e4e9dc; }
     button.button-secondary:hover { background: #334031; }
     button.button-text { margin-top: 12px; padding: 8px 12px; background: transparent; color: #bcc7b5; font-size: 9px; }
@@ -320,6 +335,8 @@
       .menu-layer { padding: 10px; }
       .menu-panel { padding: 16px; }
       .server-content { grid-template-columns: 1fr; }
+      .map-grid { grid-template-columns: 1fr; max-height: 28vh; overflow-y: auto; }
+      .map-card { min-height: 58px; }
       .room-list { max-height: 140px; }
       .menu-actions--row { grid-template-columns: 1fr; }
       .server-toolbar { align-items: flex-start; flex-direction: column; }
