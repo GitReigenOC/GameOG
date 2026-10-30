@@ -18,6 +18,253 @@
       camera.rotation.order = "YXZ";
       camera.position.set(7.5, 1.65, -7.5);
       scene.add(camera);
+      class AudioManager {
+        constructor(listenerCamera, world, engine) {
+          this.engine = engine;
+          this.world = world;
+          this.listener = new engine.AudioListener();
+          listenerCamera.add(this.listener);
+          this.context = this.listener.context;
+          this.master = this.context.createGain();
+          this.environmentFilter = this.context.createBiquadFilter();
+          this.environmentFilter.type = "lowpass";
+          this.environmentFilter.frequency.value = 20000;
+          this.reverbSend = this.context.createGain();
+          this.reverbSend.gain.value = 0;
+          this.environment = "";
+          this.convolver = this.context.createConvolver();
+          this.convolver.buffer = this.createImpulseResponse(2.4, 2.2);
+          this.listener.gain.disconnect();
+          this.listener.gain.connect(this.environmentFilter);
+          this.environmentFilter.connect(this.master);
+          this.environmentFilter.connect(this.reverbSend);
+          this.reverbSend.connect(this.convolver);
+          this.convolver.connect(this.master);
+          this.master.connect(this.context.destination);
+          this.buffers = new Map();
+          this.voices = new Set();
+          this.ambient = null;
+        }
+
+        createImpulseResponse(duration, decay) {
+          const sampleRate = this.context.sampleRate;
+          const buffer = this.context.createBuffer(2, Math.floor(sampleRate * duration), sampleRate);
+          for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
+            const samples = buffer.getChannelData(channel);
+            for (let i = 0; i < samples.length; i++) {
+              const time = i / samples.length;
+              samples[i] = (Math.random() * 2 - 1) * Math.pow(1 - time, decay);
+            }
+          }
+          return buffer;
+        }
+
+        createSoundBuffer(type) {
+          const presets = {
+            rifle: [105, .11, .24, .38], sniper: [64, .3, .34, .58],
+            shotgun: [78, .18, .32, .48], smg: [128, .06, .16, .26],
+            knife: [240, .08, .12, .16], reload: [340, .12, .05, .12],
+            damage: [72, .24, .12, .32], death: [48, .7, .16, .72],
+            grenade: [55, .4, .3, .92], flash: [880, .22, .09, .4],
+            footstep: [88, .045, .035, .12], hit: [190, .07, .06, .14]
+          };
+          const [frequency, duration, volume, noiseAmount] = presets[type] || presets.rifle;
+          const sampleRate = this.context.sampleRate;
+          const buffer = this.context.createBuffer(1, Math.max(1, Math.floor(sampleRate * duration)), sampleRate);
+          const samples = buffer.getChannelData(0);
+          for (let i = 0; i < samples.length; i++) {
+            const time = i / sampleRate;
+            const envelope = Math.exp(-time * (type === "footstep" ? 75 : 12 / duration));
+            const tone = Math.sin(2 * Math.PI * frequency * time * (1 - time / (duration * 1.7)));
+            samples[i] = (tone * (1 - noiseAmount) + (Math.random() * 2 - 1) * noiseAmount) * envelope * volume;
+          }
+          return buffer;
+        }
+
+        unlock() {
+          if (this.context.state === "suspended") this.context.resume();
+          if (this.ambient) return;
+          const oscillator = this.context.createOscillator();
+          const lowpass = this.context.createBiquadFilter();
+          const gain = this.context.createGain();
+          oscillator.type = "triangle";
+          oscillator.frequency.value = 47;
+          lowpass.type = "lowpass";
+          lowpass.frequency.value = 90;
+          gain.gain.value = .012;
+          oscillator.connect(lowpass).connect(gain).connect(this.master);
+          oscillator.start();
+          this.ambient = { oscillator, lowpass, gain };
+        }
+
+        play(type, position, options = {}) {
+          if (this.context.state === "suspended") this.context.resume();
+          if (!this.buffers.has(type)) this.buffers.set(type, this.createSoundBuffer(type));
+          const anchor = new this.engine.Object3D();
+          anchor.position.copy(position);
+          this.world.add(anchor);
+          const sound = new this.engine.PositionalAudio(this.listener);
+          sound.setBuffer(this.buffers.get(type));
+          sound.setRefDistance(options.refDistance || 2.4);
+          sound.setRolloffFactor(options.rolloffFactor || 1.35);
+          sound.setDistanceModel("inverse");
+          sound.setVolume(options.volume ?? 1);
+          sound.setLoop(false);
+          anchor.add(sound);
+          this.voices.add(anchor);
+          sound.onEnded = () => {
+            sound.disconnect();
+            anchor.remove(sound);
+            this.world.remove(anchor);
+            this.voices.delete(anchor);
+          };
+          sound.play();
+        }
+
+        setEnvironment(mapId, inTrench = false) {
+          const environment = `${mapId}:${inTrench}`;
+          if (environment === this.environment) return;
+          this.environment = environment;
+          const now = this.context.currentTime;
+          const cutoff = mapId === "battlefield" ? (inTrench ? 1100 : 4200) : 20000;
+          const reverb = mapId === "pool" ? .32 : mapId === "battlefield" && inTrench ? .12 : 0;
+          this.environmentFilter.frequency.setTargetAtTime(cutoff, now, .18);
+          this.reverbSend.gain.setTargetAtTime(reverb, now, .2);
+        }
+
+        dispose() {
+          for (const anchor of this.voices) {
+            const sound = anchor.children.find(child => child.isPositionalAudio);
+            if (sound?.isPlaying) sound.stop();
+            sound?.disconnect();
+            this.world.remove(anchor);
+          }
+          this.voices.clear();
+          this.listener.gain.disconnect();
+          this.master.disconnect();
+          this.context.close();
+        }
+      }
+
+      class NetworkManager {
+        constructor({ interpolationDelay = 110, maxSnapshots = 24, maxPredictions = 120 } = {}) {
+          this.interpolationDelay = interpolationDelay;
+          this.maxSnapshots = maxSnapshots;
+          this.maxPredictions = maxPredictions;
+          this.sequence = 0;
+          this.snapshots = [];
+          this.predictions = [];
+          this.lastSequence = -1;
+          this.lastAuthoritative = null;
+          this.lastAuthorityTime = 0;
+          this.correction = { x: 0, y: 0 };
+        }
+
+        createSnapshot(state) {
+          const sequence = ++this.sequence;
+          const snapshot = { ...state, sequence };
+          this.predictions.push({
+            sequence,
+            x: state.position.x,
+            z: state.position.z
+          });
+          if (this.predictions.length > this.maxPredictions) this.predictions.shift();
+          return snapshot;
+        }
+
+        pushSnapshot(snapshot, { maxSpeed = 10, canOccupy = () => true } = {}) {
+          if (!Number.isInteger(snapshot.sequence) || snapshot.sequence <= this.lastSequence) return null;
+          const now = performance.now();
+          let position = { ...snapshot.position };
+          if (this.lastAuthoritative) {
+            const elapsed = Math.max(.05, Math.min(1, (now - this.lastAuthorityTime) / 1000));
+            const dx = position.x - this.lastAuthoritative.x;
+            const dz = position.z - this.lastAuthoritative.z;
+            const distance = Math.hypot(dx, dz);
+            const maxDistance = maxSpeed * elapsed + .45;
+            if (distance > maxDistance) {
+              const scale = maxDistance / distance;
+              position.x = this.lastAuthoritative.x + dx * scale;
+              position.z = this.lastAuthoritative.z + dz * scale;
+            }
+            if (!canOccupy(position.x, -position.z)) position = { ...this.lastAuthoritative };
+          } else if (!canOccupy(position.x, -position.z)) {
+            return null;
+          }
+          this.lastSequence = snapshot.sequence;
+          this.lastAuthorityTime = now;
+          this.lastAuthoritative = position;
+          const accepted = { ...snapshot, position, receivedAt: now };
+          this.snapshots.push(accepted);
+          if (this.snapshots.length > this.maxSnapshots) this.snapshots.shift();
+          return accepted;
+        }
+
+        sampleRemote(now = performance.now()) {
+          if (!this.snapshots.length) return null;
+          const targetTime = now - this.interpolationDelay;
+          while (this.snapshots.length > 2 && this.snapshots[1].receivedAt <= targetTime) {
+            this.snapshots.shift();
+          }
+          const older = this.snapshots[0];
+          const newer = this.snapshots[1];
+          if (!newer) return older;
+          const span = newer.receivedAt - older.receivedAt;
+          const alpha = span > 0 ? Math.max(0, Math.min(1, (targetTime - older.receivedAt) / span)) : 1;
+          const lerp = (a, b) => a + (b - a) * alpha;
+          const angleDelta = Math.atan2(Math.sin(newer.angle - older.angle), Math.cos(newer.angle - older.angle));
+          const direction = {
+            x: lerp(older.cameraDirection.x, newer.cameraDirection.x),
+            y: lerp(older.cameraDirection.y, newer.cameraDirection.y),
+            z: lerp(older.cameraDirection.z, newer.cameraDirection.z)
+          };
+          const directionLength = Math.hypot(direction.x, direction.y, direction.z) || 1;
+          return {
+            ...newer,
+            x: lerp(older.position.x, newer.position.x),
+            y: -lerp(older.position.z, newer.position.z),
+            angle: older.angle + angleDelta * alpha,
+            pitch: lerp(older.pitch, newer.pitch),
+            cameraDirection: {
+              x: direction.x / directionLength,
+              y: direction.y / directionLength,
+              z: direction.z / directionLength
+            }
+          };
+        }
+
+        reconcile(acknowledgement) {
+          if (!Number.isInteger(acknowledgement.sequence) || !acknowledgement.position) return;
+          const predicted = this.predictions.find(item => item.sequence === acknowledgement.sequence);
+          if (predicted) {
+            this.correction.x += acknowledgement.position.x - predicted.x;
+            this.correction.y += -acknowledgement.position.z - predicted.z;
+          }
+          this.predictions = this.predictions.filter(item => item.sequence > acknowledgement.sequence);
+        }
+
+        consumeCorrection(deltaTime) {
+          const blend = 1 - Math.exp(-12 * deltaTime);
+          const x = this.correction.x * blend;
+          const y = this.correction.y * blend;
+          this.correction.x -= x;
+          this.correction.y -= y;
+          return { x, y };
+        }
+
+        reset() {
+          this.snapshots.length = 0;
+          this.predictions.length = 0;
+          this.lastSequence = -1;
+          this.lastAuthoritative = null;
+          this.lastAuthorityTime = 0;
+          this.correction.x = 0;
+          this.correction.y = 0;
+        }
+      }
+
+      const audioManager = new AudioManager(camera, scene, THREE);
+      const networkManager = new NetworkManager();
       const ambientLight = new THREE.AmbientLight("#bac7aa", 1.15);
       scene.add(ambientLight);
       const sunLight = new THREE.DirectionalLight("#f0e5c4", 2.2);
@@ -199,6 +446,7 @@
 
       function buildArena(mapId) {
         const definition = mapDefinitions[mapId];
+        audioManager.setEnvironment(mapId);
         const width = map[0].length, depth = map.length;
         animatedMapProps = [];
         dynamicMapLights = [];
@@ -493,7 +741,7 @@
       let touchStickPointerId = null;
       let grenadeCooldown = 0, flashbangCooldown = 0, grenadeAnimation = 0, flashbangAnimation = 0;
       let grenades = 2, flashbangs = 1;
-      let grenadeFlash = 0, damageMessageTimer = 0, footstepsTimer = 0, audioContext = null, ambientStarted = false;
+      let grenadeFlash = 0, damageMessageTimer = 0, footstepsTimer = 0;
       const controlSettings = { mouseSensitivity: 1, scopeSensitivity: .44 };
       let settingsReturnToPause = false;
       let reloadKind = "";
@@ -595,50 +843,11 @@
       }
 
       function ensureAudio() {
-        if (!audioContext) {
-          const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-          if (!AudioContextClass) return;
-          audioContext = new AudioContextClass();
-        }
-        if (audioContext.state === "suspended") audioContext.resume();
-        if (!ambientStarted) {
-          ambientStarted = true;
-          const tone = audioContext.createOscillator();
-          const gain = audioContext.createGain();
-          const lowpass = audioContext.createBiquadFilter();
-          tone.type = "triangle";
-          tone.frequency.value = 47;
-          lowpass.type = "lowpass";
-          lowpass.frequency.value = 90;
-          gain.gain.value = .012;
-          tone.connect(lowpass).connect(gain).connect(audioContext.destination);
-          tone.start();
-        }
+        audioManager.unlock();
       }
 
-      function playSound(type) {
-        if (!audioContext) return;
-        const now = audioContext.currentTime;
-        const oscillator = audioContext.createOscillator();
-        const gain = audioContext.createGain();
-        const filter = audioContext.createBiquadFilter();
-        const presets = {
-          rifle: [105, .11, .24], sniper: [64, .3, .34], shotgun: [78, .18, .32],
-          smg: [128, .06, .16], knife: [240, .08, .12], reload: [340, .12, .05],
-          damage: [72, .24, .12], death: [48, .7, .16], grenade: [55, .4, .3],
-          flash: [880, .22, .09], footstep: [88, .045, .035], hit: [190, .07, .06]
-        };
-        const [frequency, duration, volume] = presets[type] || presets.rifle;
-        oscillator.type = type === "damage" || type === "death" || type === "grenade" ? "sawtooth" : "square";
-        oscillator.frequency.setValueAtTime(frequency, now);
-        oscillator.frequency.exponentialRampToValueAtTime(Math.max(35, frequency * .48), now + duration);
-        filter.type = "lowpass";
-        filter.frequency.value = type === "footstep" ? 180 : 1800;
-        gain.gain.setValueAtTime(Math.min(.42, volume), now);
-        gain.gain.exponentialRampToValueAtTime(.001, now + duration);
-        oscillator.connect(filter).connect(gain).connect(audioContext.destination);
-        oscillator.start(now);
-        oscillator.stop(now + duration);
+      function playSound(type, position = new THREE.Vector3(player.x, 1, -player.y), options = {}) {
+        audioManager.play(type, position, options);
       }
 
       function setCombatMessage(message, duration = 1400) {
@@ -693,7 +902,7 @@
       function sendPlayerState() {
         if (!networkConnection?.open) return;
         const horizontalLook = Math.cos(playerPitch);
-        sendPeerMessage({
+        sendPeerMessage(networkManager.createSnapshot({
           type: "state",
           x: player.x,
           y: player.y,
@@ -709,14 +918,14 @@
           weapon: player.weaponIndex,
           mapId: activeMapId,
           firing
-        });
+        }));
       }
 
       function removeRemoteModel() {
-        if (!remoteModel) return;
-        scene.remove(remoteModel);
+        if (remoteModel) scene.remove(remoteModel);
         remoteModel = null;
         remotePlayer = null;
+        networkManager.reset();
       }
 
       function applyRemoteShot(angle, pitch, weaponIndex) {
@@ -744,6 +953,12 @@
 
       function handlePeerData(data) {
         if (!data || typeof data !== "object") return;
+        if (data.type === "ack" && networkRole !== "host" &&
+          Number.isInteger(data.sequence) && data.position &&
+          Number.isFinite(data.position.x) && Number.isFinite(data.position.z)) {
+          networkManager.reconcile(data);
+          return;
+        }
         if (data.type === "state" && Number.isFinite(data.x) && Number.isFinite(data.y) &&
           Number.isFinite(data.angle) && Number.isFinite(data.health) && Number.isInteger(data.weapon) &&
           data.position && Number.isFinite(data.position.x) && Number.isFinite(data.position.y) &&
@@ -763,22 +978,33 @@
             player.x = mapDefinitions[data.mapId].spawn.x;
             player.y = mapDefinitions[data.mapId].spawn.y;
           }
-          const remoteMap = mapDefinitions[data.mapId].grid;
-          const remoteX = data.position.x;
-          const remoteY = -data.position.z;
-          if (remoteX < 0 || remoteY < 0 || remoteY >= remoteMap.length ||
-            remoteX >= remoteMap[0].length || remoteMap[Math.floor(remoteY)][Math.floor(remoteX)] !== "0") return;
-          remotePlayer = {
-            x: remoteX, y: remoteY, angle: data.angle,
-            cameraDirection: data.cameraDirection,
-            pitch: Math.max(-1.35, Math.min(1.35, data.pitch)),
-            health: data.health, weapon: data.weapon, firing: data.firing
-          };
+          if (data.mapId !== activeMapId) return;
+          const accepted = networkManager.pushSnapshot(data, {
+            maxSpeed: 10,
+            canOccupy: (x, y) => canOccupyOnMap(mapDefinitions[data.mapId].grid, x, y, .24)
+          });
+          if (!accepted) {
+            if (networkRole === "host" && Number.isInteger(data.sequence) && networkManager.lastAuthoritative) {
+              sendPeerMessage({
+                type: "ack", sequence: data.sequence,
+                position: networkManager.lastAuthoritative, mapId: activeMapId
+              });
+            }
+            return;
+          }
+          if (networkRole === "host") {
+            sendPeerMessage({
+              type: "ack", sequence: accepted.sequence,
+              position: accepted.position, mapId: activeMapId
+            });
+          }
           return;
         }
         if (data.type === "shot" && Number.isFinite(data.angle) && Number.isFinite(data.pitch) &&
           Number.isInteger(data.weapon) && data.weapon >= 0 && data.weapon < weapons.length) {
           if (remotePlayer) {
+            const soundType = ["rifle", "sniper", "shotgun", "smg", "knife"][data.weapon];
+            playSound(soundType, new THREE.Vector3(remotePlayer.x, 1, -remotePlayer.y));
             const origin = new THREE.Vector3(remotePlayer.x, 1.25, -remotePlayer.y);
             const direction = new THREE.Vector3(
               Math.cos(data.angle) * Math.cos(data.pitch),
@@ -819,6 +1045,7 @@
         connection.on("data", handlePeerData);
         connection.on("close", () => {
           networkConnection = null;
+          networkManager.reset();
           if (networkStateTimer) clearInterval(networkStateTimer);
           networkStateTimer = 0;
           removeRemoteModel();
@@ -948,7 +1175,7 @@
         ], { duration: travelTime, easing: "ease-in" }).finished.then(() => projectile.remove());
         setTimeout(() => {
           if (!flash) {
-            playSound("grenade");
+            playSound("grenade", new THREE.Vector3(impactX, .15, -impactY), { refDistance: 4, rolloffFactor: .9 });
             grenadeFlash = .2;
             explosions.push({ x: impactX, y: impactY, age: 0, duration: 1.1 });
             enemies = enemies.filter(enemy => {
@@ -964,7 +1191,7 @@
             if (gameMode === "tdm" ? !enemies.some(enemy => enemy.team === 1) :
               !isWaveMode() && enemies.length === 0) endGame();
           } else {
-            playSound("flash");
+            playSound("flash", new THREE.Vector3(impactX, .15, -impactY), { refDistance: 3, rolloffFactor: 1.1 });
             grenadeFlash = 1.2;
             enemies.forEach(enemy => { enemy.stunned = 2.2; });
             document.querySelector("#damage-overlay").classList.add("flashbang");
@@ -1044,6 +1271,25 @@
           if (canOccupy(player.x + stepX, player.y, radius)) player.x += stepX;
           if (canOccupy(player.x, player.y + stepY, radius)) player.y += stepY;
         }
+      }
+
+      function canOccupyOnMap(grid, x, y, radius) {
+        const wall = (px, py) => {
+          const mx = Math.floor(px), my = Math.floor(py);
+          return my < 0 || mx < 0 || my >= grid.length || mx >= grid[my].length || grid[my][mx] !== "0";
+        };
+        return !wall(x - radius, y - radius) && !wall(x + radius, y - radius) &&
+          !wall(x - radius, y + radius) && !wall(x + radius, y + radius);
+      }
+
+      function isInBattlefieldTrench() {
+        if (activeMapId !== "battlefield") return false;
+        let nearbyCover = 0;
+        for (let offset = -1; offset <= 1; offset++) {
+          if (offset === 0) continue;
+          if (wallAt(player.x + offset, player.y) || wallAt(player.x, player.y + offset)) nearbyCover++;
+        }
+        return nearbyCover >= 2;
       }
 
       function movementInput() {
@@ -1166,6 +1412,8 @@
       }
 
       function updateRemoteModel() {
+        const interpolated = networkManager.sampleRemote();
+        if (interpolated) remotePlayer = interpolated;
         if (!remotePlayer || !networkConnection?.open) {
           if (remoteModel) remoteModel.visible = false;
           return;
@@ -1191,6 +1439,7 @@
           enemies.push({
             x, y, health: 100, attack: Math.random() * 1.5,
             strafe: Math.random() < .5 ? 1 : -1, phase: Math.random() * Math.PI * 2,
+            footstepTimer: Math.random() * .25, sprinting: false,
             team: gameMode === "tdm" ? (i < 2 ? 0 : 1) : 1
           });
         }
@@ -1230,6 +1479,7 @@
         updateRemoteModel();
         camera.position.set(player.x, 1.65 - (dashTimer > 0 ? .22 : 0), -player.y);
         camera.rotation.set(playerPitch, player.angle - Math.PI / 2, 0);
+        audioManager.setEnvironment(activeMapId, isInBattlefieldTrench());
         const flickerTime = performance.now() * .004;
         dynamicMapLights.forEach((light, index) => {
           light.intensity = light.userData.baseIntensity * (.82 + Math.sin(flickerTime + index * 2.1) * .18);
@@ -1404,20 +1654,31 @@
           movePlayer((Math.cos(player.angle) * forward + Math.cos(player.angle - Math.PI / 2) * strafe) / length * speed,
             (Math.sin(player.angle) * forward + Math.sin(player.angle - Math.PI / 2) * strafe) / length * speed);
         }
+        const correction = networkManager.consumeCorrection(dt);
+        if (correction.x || correction.y) movePlayer(correction.x, correction.y);
 
         for (const enemy of enemies) {
           const dx = player.x - enemy.x, dy = player.y - enemy.y, distance = Math.hypot(dx, dy);
           enemy.phase += dt * (distance > 1.15 ? 7 : 2);
           enemy.stunned = Math.max(0, (enemy.stunned || 0) - dt);
           enemy.attack -= dt;
+          enemy.footstepTimer = Math.max(0, enemy.footstepTimer - dt);
           if (enemy.stunned > 0) continue;
           if (distance > 1.15) {
+            enemy.sprinting = distance > 3.5;
             const approach = distance > 3 ? 1 : .35;
             const vx = (dx / distance * approach + -dy / distance * .18 * enemy.strafe) * dt * .68;
             const vy = (dy / distance * approach + dx / distance * .18 * enemy.strafe) * dt * .68;
             if (!wallAt(enemy.x + vx, enemy.y)) enemy.x += vx;
             if (!wallAt(enemy.x, enemy.y + vy)) enemy.y += vy;
+            if (enemy.footstepTimer <= 0) {
+              playSound("footstep", new THREE.Vector3(enemy.x, .1, -enemy.y), {
+                volume: enemy.sprinting ? 1.15 : .72, refDistance: 1.8, rolloffFactor: 1.6
+              });
+              enemy.footstepTimer = enemy.sprinting ? .28 : .42;
+            }
           } else if (enemy.attack <= 0 && castRayFrom(enemy.x, enemy.y, Math.atan2(dy, dx)).distance >= distance - .25) {
+            enemy.sprinting = false;
             enemy.attack = 1.8 + Math.random() * .8;
             player.health = Math.max(0, player.health - 6);
             hurtFlash = .8;
