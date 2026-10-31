@@ -20,3 +20,12 @@ if an asset uses different dimensions.
 
 Until a model file is present and loads successfully, the corresponding built-in
 3D weapon remains visible.
+
+The built-in models use the game's procedural dark composite finish and remain
+playable without external assets. The loadout panel supports optic, suppressor,
+and foregrip attachments; their meshes are rendered over either the built-in
+model or a loaded GLB. The optic adds a modest ADS zoom, the foregrip tightens
+spread, and the suppressor lowers the firing volume.
+
+Player and bot characters are currently assembled from articulated procedural
+parts in `game.js`; no character rig files are required.

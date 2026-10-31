@@ -2,6 +2,9 @@
 title: BLACKSITE — Tactical Arena
 description: A browser-based tactical arena training game.
 ---
+
+<link rel="icon" type="image/png" href="{{ '/BLogo.png' | blob:https://chatgpt.com/58f474cc-cbcd-4b7c-8c89-99e771e6029f }}">
+
   <main class="game-shell">
     <header class="topbar">
       <div class="brand">BLACK<span>SITE</span></div>
@@ -102,6 +105,21 @@ description: A browser-based tactical arena training game.
             <button type="button" id="settings-button" class="button-secondary">Settings</button>
             <button type="button" id="profile-button" class="button-text">View operator profile</button>
           </div>
+          <section class="loadout-panel" aria-label="Weapon customization">
+            <label for="loadout-weapon">LOADOUT WEAPON</label>
+            <select id="loadout-weapon">
+              <option value="0">Assault rifle</option>
+              <option value="1">Precision sniper</option>
+              <option value="2">Breach shotgun</option>
+              <option value="3">Compact SMG</option>
+              <option value="4">Combat knife</option>
+            </select>
+            <div class="attachment-options">
+              <label><input type="checkbox" data-attachment="optic"> Optic</label>
+              <label><input type="checkbox" data-attachment="suppressor"> Suppressor</label>
+              <label><input type="checkbox" data-attachment="foregrip"> Foregrip</label>
+            </div>
+          </section>
           <p class="prototype-note">Private matches connect two browsers directly using WebRTC.</p>
         </div>
       </div>

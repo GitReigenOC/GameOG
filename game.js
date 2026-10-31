@@ -14,7 +14,7 @@
       const scene = new THREE.Scene();
       scene.background = new THREE.Color("#111a17");
       scene.fog = new THREE.Fog("#202920", 12, 27);
-      const camera = new THREE.PerspectiveCamera(72, 16 / 9, .1, 120);
+      const camera = new THREE.PerspectiveCamera(72, 16 / 9, .035, 120);
       camera.rotation.order = "YXZ";
       camera.position.set(7.5, 1.65, -7.5);
       scene.add(camera);
@@ -44,6 +44,8 @@
           this.buffers = new Map();
           this.voices = new Set();
           this.ambient = null;
+          this.musicLayers = [];
+          this.combatIntensity = -1;
         }
 
         createImpulseResponse(duration, decay) {
@@ -95,6 +97,29 @@
           oscillator.connect(lowpass).connect(gain).connect(this.master);
           oscillator.start();
           this.ambient = { oscillator, lowpass, gain };
+          [55, 82.41, 110].forEach((frequency, index) => {
+            const layer = this.context.createOscillator();
+            const layerGain = this.context.createGain();
+            const filter = this.context.createBiquadFilter();
+            layer.type = index === 1 ? "sine" : "triangle";
+            layer.frequency.value = frequency;
+            filter.type = "lowpass";
+            filter.frequency.value = index === 2 ? 520 : 260;
+            layerGain.gain.value = 0;
+            layer.connect(filter).connect(layerGain).connect(this.master);
+            layer.start();
+            this.musicLayers.push({ gain: layerGain, base: [.009, .006, .003][index] });
+          });
+        }
+
+        setCombatIntensity(intensity) {
+          const level = Math.min(1, Math.max(0, intensity));
+          if (Math.abs(level - this.combatIntensity) < .08) return;
+          this.combatIntensity = level;
+          const now = this.context.currentTime;
+          this.musicLayers.forEach(({ gain, base }, index) => {
+            gain.gain.setTargetAtTime(base * level * (index === 0 ? 1 : .35 + level * .65), now, .45);
+          });
         }
 
         play(type, position, options = {}) {
@@ -289,10 +314,16 @@
       let weaponAnchor = null;
       let muzzleLight = null;
       let weaponModels = [];
+      let weaponAttachmentModels = [];
       let weaponLoader = null;
       let networkPeer = null, networkConnection = null, networkRole = "";
       let networkStateTimer = 0, remotePlayer = null, roomCode = "";
       const raycaster = new THREE.Raycaster();
+      const aimRaycaster = new THREE.Raycaster();
+      const cameraRaycaster = new THREE.Raycaster();
+      const transientEffects = [];
+      let grenadeAim = false;
+      let grenadeArc = null;
       const overlay = document.querySelector("#overlay");
       const startButton = document.querySelector("#start-button");
       const returnMenuButton = document.querySelector("#return-menu-button");
@@ -614,6 +645,8 @@
         { name: "COMPACT SMG", short: "SMG", magazine: 32, ammo: 32, reserve: 128, damage: 34, spread: .12, interval: .085, reloadTime: 1.1, range: 13, auto: true },
         { name: "COMBAT KNIFE", short: "KNIFE", magazine: 0, ammo: 0, reserve: 0, damage: 100, spread: .6, interval: .48, melee: true }
       ];
+      weapons.forEach(weapon => { weapon.attachments = { optic: false, suppressor: false, foregrip: false }; });
+      let loadoutWeaponIndex = 0;
       const weaponModelSources = [
         "assets/weapons/rifle.glb",
         "assets/weapons/sniper.glb",
@@ -633,19 +666,53 @@
         return mesh;
       }
 
+      function weaponCylinder(parent, radius, length, position, material, name) {
+        const mesh = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, length, 12), material);
+        mesh.rotation.x = Math.PI / 2;
+        mesh.position.set(...position);
+        mesh.name = name;
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        parent.add(mesh);
+        return mesh;
+      }
+
       function createFallbackWeapon(index) {
         const group = new THREE.Group();
         const darkMetal = cachedMaterial("weapon-metal", "#292f2c", { metalness: .78, roughness: .32 });
         const edgeMetal = cachedMaterial("weapon-edge", "#7d8277", { metalness: .84, roughness: .24 });
-        const polymer = cachedMaterial("weapon-polymer", "#343a31", { roughness: .76 });
+        const polymer = cachedMaterial("weapon-polymer", "#ffffff", {
+          roughness: .76,
+          map: cachedArenaTexture("weapon-composite", "#2c342e", "#47513d", 3, 3)
+        });
         const gripMaterial = cachedMaterial("weapon-grip", "#191d19", { roughness: .94 });
         const accent = cachedMaterial("weapon-accent", "#737969", { metalness: .58, roughness: .42 });
         const barrelLength = index === 1 ? .57 : index === 2 ? .4 : index === 3 ? .28 : .36;
 
         if (index === 4) {
-          weaponBox(group, [.045, .045, .25], [0, -.02, -.08], edgeMetal, "knife-blade");
-          weaponBox(group, [.075, .065, .13], [0, -.075, .11], gripMaterial, "knife-handle");
-          weaponBox(group, [.15, .025, .025], [0, -.045, .025], accent, "knife-guard");
+          const bladeShape = new THREE.Shape();
+          bladeShape.moveTo(-.035, .035);
+          bladeShape.quadraticCurveTo(-.105, .13, -.045, .22);
+          bladeShape.quadraticCurveTo(.015, .31, .12, .365);
+          bladeShape.quadraticCurveTo(.105, .285, .055, .205);
+          bladeShape.quadraticCurveTo(.005, .12, .045, .035);
+          bladeShape.closePath();
+          const bladeGeometry = new THREE.ExtrudeGeometry(bladeShape, {
+            depth: .025, bevelEnabled: true, bevelSegments: 2, steps: 1, bevelSize: .008, bevelThickness: .006
+          });
+          bladeGeometry.rotateX(-Math.PI / 2);
+          const blade = new THREE.Mesh(bladeGeometry, edgeMetal);
+          blade.name = "karambit-blade";
+          blade.position.y = -.01;
+          blade.castShadow = true;
+          group.add(blade);
+          weaponBox(group, [.075, .07, .19], [0, -.06, .13], gripMaterial, "karambit-grip");
+          weaponBox(group, [.13, .025, .035], [0, -.035, .025], accent, "karambit-guard");
+          const fingerRing = new THREE.Mesh(new THREE.TorusGeometry(.055, .012, 8, 18), edgeMetal);
+          fingerRing.position.set(0, -.055, .235);
+          fingerRing.castShadow = true;
+          group.add(fingerRing);
+          weaponBox(group, [.085, .018, .12], [0, -.02, .13], polymer, "karambit-scale");
           return group;
         }
 
@@ -654,8 +721,8 @@
         weaponBox(group, [.18, .16, index === 1 ? .28 : .2], [0, -.005, .2], polymer, "stock");
         weaponBox(group, [.1, .2, .11], [0, -.15, .02], gripMaterial, "pistol-grip");
         weaponBox(group, [.07, .19, .16], [0, -.17, -.08], gripMaterial, "magazine");
-        weaponBox(group, [.045, .05, barrelLength], [0, .025, -.2 - barrelLength / 2], edgeMetal, "barrel");
-        weaponBox(group, [.09, .09, .08], [0, .025, -.25 - barrelLength], darkMetal, "muzzle-brake");
+        weaponCylinder(group, .027, barrelLength, [0, .025, -.2 - barrelLength / 2], edgeMetal, "barrel");
+        weaponCylinder(group, .046, .075, [0, .025, -.25 - barrelLength], darkMetal, "muzzle-brake");
         weaponBox(group, [.28, .035, .045], [0, .12, -.04], gripMaterial, "top-rail");
         for (let notch = 0; notch < 5; notch++) {
           weaponBox(group, [.026, .012, .012], [-.105 + notch * .052, .145, -.04], edgeMetal, `rail-notch-${notch}`);
@@ -682,6 +749,52 @@
         return group;
       }
 
+      function createWeaponAttachments() {
+        const group = new THREE.Group();
+        const metal = cachedMaterial("attachment-metal", "#343b35", { metalness: .8, roughness: .3 });
+        const glass = cachedMaterial("attachment-glass", "#233b3a", { metalness: .25, roughness: .2, emissive: "#274544", emissiveIntensity: .25 });
+        const optic = new THREE.Group();
+        const opticTube = new THREE.Mesh(new THREE.CylinderGeometry(.045, .045, .19, 12), metal);
+        opticTube.rotation.x = Math.PI / 2;
+        opticTube.position.set(0, .205, -.035);
+        const opticGlass = new THREE.Mesh(new THREE.CylinderGeometry(.032, .032, .012, 12), glass);
+        opticGlass.rotation.x = Math.PI / 2;
+        opticGlass.position.set(0, .205, -.137);
+        optic.add(opticTube, opticGlass);
+        const suppressor = new THREE.Group();
+        const suppressorBody = new THREE.Mesh(new THREE.CylinderGeometry(.045, .045, .24, 12), metal);
+        suppressorBody.rotation.x = Math.PI / 2;
+        suppressorBody.position.set(0, .025, -.72);
+        suppressor.add(suppressorBody);
+        const foregrip = new THREE.Group();
+        const gripMesh = new THREE.Mesh(cachedBoxGeometry(.075, .13, .085), metal);
+        gripMesh.position.set(.085, -.13, -.15);
+        foregrip.add(gripMesh);
+        group.add(optic, suppressor, foregrip);
+        group.userData.slots = { optic, suppressor, foregrip };
+        group.traverse(object => {
+          if (object.isMesh) {
+            object.castShadow = true;
+            object.frustumCulled = true;
+          }
+        });
+        return group;
+      }
+
+      function applyWeaponAttachments(index) {
+        const slots = weaponAttachmentModels[index]?.userData.slots;
+        if (!slots) return;
+        for (const [name, object] of Object.entries(slots)) {
+          object.visible = Boolean(weapons[index].attachments[name]);
+        }
+      }
+
+      function updateLoadoutControls() {
+        document.querySelectorAll("[data-attachment]").forEach(input => {
+          input.checked = Boolean(weapons[loadoutWeaponIndex].attachments[input.dataset.attachment]);
+        });
+      }
+
       function initializeWeapons() {
         weaponAnchor = new THREE.Group();
         weaponAnchor.position.set(.32, -.3, -.48);
@@ -695,6 +808,13 @@
           weaponAnchor.add(fallback);
           return { fallback, loaded: null };
         });
+        weaponAttachmentModels = weapons.map((weapon, index) => {
+          const attachments = createWeaponAttachments();
+          attachments.visible = index === player.weaponIndex;
+          weaponAnchor.add(attachments);
+          return attachments;
+        });
+        weaponAttachmentModels.forEach((attachments, index) => applyWeaponAttachments(index));
         if (!THREE.GLTFLoader) {
           console.warn("GLTFLoader is unavailable; using procedural 3D weapon models.");
           return;
@@ -745,6 +865,10 @@
       const controlSettings = { mouseSensitivity: 1, scopeSensitivity: .44 };
       let settingsReturnToPause = false;
       let reloadKind = "";
+      let lastEscapePress = 0;
+      let pointerLockPauseAt = 0;
+      let escapeRunningBeforeFirst = false;
+      let suppressPointerLockPauseUntil = 0;
       let operatorName = "", selectedMode = "ffa-waves", gameMode = "waves";
       let roomMessageTimeout = 0, profileReturnScreen = mainMenu;
 
@@ -1164,25 +1288,33 @@
           if (wallAt(x, y)) break;
           impactX = x; impactY = y;
         }
-        const projectile = document.createElement("span");
-        projectile.className = `thrown-item${flash ? " thrown-item--flash" : ""}`;
-        document.querySelector(".stage").append(projectile);
+        const projectile = new THREE.Group();
+        const bodyMaterial = cachedMaterial("grenade-body", flash ? "#a99e78" : "#59634d", { roughness: .7, metalness: .18 });
+        const bandMaterial = cachedMaterial("grenade-band", flash ? "#e4d8ad" : "#252b25", { roughness: .5, metalness: .55 });
+        const body = new THREE.Mesh(new THREE.CylinderGeometry(.095, .105, .2, 12), bodyMaterial);
+        const cap = new THREE.Mesh(new THREE.CylinderGeometry(.045, .045, .045, 10), bandMaterial);
+        const lever = new THREE.Mesh(cachedBoxGeometry(.16, .018, .035), bandMaterial);
         const travelTime = 340;
-        projectile.animate([
-          { transform: "translate(0,0) scale(.5)", opacity: 1 },
-          { transform: "translate(-18px,-42px) scale(.7)", opacity: 1, offset: .48 },
-          { transform: "translate(-35px,-5px) scale(.3)", opacity: .8 }
-        ], { duration: travelTime, easing: "ease-in" }).finished.then(() => projectile.remove());
+        body.castShadow = cap.castShadow = lever.castShadow = true;
+        cap.position.y = .115;
+        lever.position.set(.03, .14, 0);
+        projectile.add(body, cap, lever);
+        projectile.position.set(player.x, .95, -player.y);
+        scene.add(projectile);
+        const projectileFlight = { model: projectile, age: 0, duration: travelTime / 1000, startX: player.x, startY: player.y, impactX, impactY };
+        transientEffects.push({ object: projectile, age: 0, duration: travelTime / 1000, type: "ordnance", flight: projectileFlight });
         setTimeout(() => {
           if (!flash) {
             playSound("grenade", new THREE.Vector3(impactX, .15, -impactY), { refDistance: 4, rolloffFactor: .9 });
             grenadeFlash = .2;
             explosions.push({ x: impactX, y: impactY, age: 0, duration: 1.1 });
+            addBlastEffect(new THREE.Vector3(impactX, .45, -impactY));
+            addImpactParticles(new THREE.Vector3(impactX, .45, -impactY), "#ffad53");
             enemies = enemies.filter(enemy => {
               if (gameMode === "tdm" && enemy.team !== 1) return true;
               const distanceToBlast = Math.hypot(enemy.x - impactX, enemy.y - impactY);
-              if (distanceToBlast > 2.8) return true;
-              enemy.health -= 160 * (1 - distanceToBlast / 4);
+              if (distanceToBlast > 3.8) return true;
+              enemy.health -= 160 * (1 - distanceToBlast / 4.5);
               if (enemy.health <= 0) player.score += 100;
               return enemy.health > 0;
             });
@@ -1193,9 +1325,22 @@
           } else {
             playSound("flash", new THREE.Vector3(impactX, .15, -impactY), { refDistance: 3, rolloffFactor: 1.1 });
             grenadeFlash = 1.2;
-            enemies.forEach(enemy => { enemy.stunned = 2.2; });
-            document.querySelector("#damage-overlay").classList.add("flashbang");
-            setTimeout(() => document.querySelector("#damage-overlay").classList.remove("flashbang"), 950);
+            addImpactParticles(new THREE.Vector3(impactX, .35, -impactY), "#fff4ce");
+            enemies.forEach(enemy => {
+              const distanceToBlast = Math.hypot(enemy.x - impactX, enemy.y - impactY);
+              const towardBlastX = impactX - enemy.x, towardBlastY = impactY - enemy.y;
+              const facingDot = (enemy.facingX || 0) * towardBlastX + (enemy.facingY || 0) * towardBlastY;
+              const lineOfSight = castRayFrom(enemy.x, enemy.y, Math.atan2(towardBlastY, towardBlastX)).distance;
+              if (distanceToBlast <= 8 && facingDot > 0 && lineOfSight >= distanceToBlast - .25) enemy.stunned = 2.2;
+            });
+            const playerDistance = Math.hypot(player.x - impactX, player.y - impactY);
+            const towardBlastX = impactX - player.x, towardBlastY = impactY - player.y;
+            const playerFacingDot = Math.cos(player.angle) * towardBlastX + Math.sin(player.angle) * towardBlastY;
+            const playerLineOfSight = castRayFrom(player.x, player.y, Math.atan2(towardBlastY, towardBlastX)).distance;
+            if (playerDistance <= 8 && playerFacingDot > 0 && playerLineOfSight >= playerDistance - .25) {
+              document.querySelector("#damage-overlay").classList.add("flashbang");
+              setTimeout(() => document.querySelector("#damage-overlay").classList.remove("flashbang"), 950);
+            }
             setCombatMessage("FLASHBANG OUT");
           }
         }, travelTime);
@@ -1225,6 +1370,9 @@
         document.querySelectorAll(".weapon-slot").forEach((slot, index) => {
           slot.classList.toggle("active", index === player.weaponIndex);
           slot.setAttribute("aria-pressed", String(index === player.weaponIndex));
+        });
+        weaponAttachmentModels.forEach((attachments, index) => {
+          attachments.visible = index === player.weaponIndex;
         });
       }
 
@@ -1341,20 +1489,72 @@
           if (!staticGeometries.has(key)) staticGeometries.set(key, new THREE.SphereGeometry(radius, 12, 8));
           return addPart(staticGeometries.get(key), material, position, name);
         };
+        const limb = (parent, x, y, length, radius, material, name) => {
+          const pivot = new THREE.Group();
+          pivot.position.set(x, y, 0);
+          pivot.name = name;
+          const geometryKey = `limb:${length}:${radius}`;
+          if (!staticGeometries.has(geometryKey)) {
+            staticGeometries.set(geometryKey, new THREE.CylinderGeometry(radius * .8, radius, length, 10));
+          }
+          const segment = new THREE.Mesh(staticGeometries.get(geometryKey), material);
+          segment.position.y = -length / 2;
+          segment.castShadow = true;
+          segment.userData.enemyRef = enemy;
+          pivot.add(segment);
+          parent.add(pivot);
+          return pivot;
+        };
         box([.48, .7, .28], uniform, [0, 1.05, 0], "torso");
         box([.54, .24, .33], armor, [0, 1.22, -.015], "vest");
         sphere(.19, skin, [0, 1.62, 0], "head");
         sphere(.205, armor, [0, 1.73, -.005], "helmet");
         box([.24, .045, .12], visor, [0, 1.63, -.175], "visor");
-        const leftLeg = box([.17, .58, .2], armor, [-.14, .39, 0], "left-leg");
-        const rightLeg = box([.17, .58, .2], armor, [.14, .39, 0], "right-leg");
-        const leftArm = box([.16, .55, .18], uniform, [-.34, 1.02, -.03], "left-arm");
-        const rightArm = box([.16, .55, .18], uniform, [.34, 1.02, -.03], "right-arm");
-        box([.52, .12, .28], armor, [0, .08, .02], "boots");
+        box([.11, .13, .17], armor, [-.14, 1.12, -.18], "left-pouch");
+        box([.11, .13, .17], armor, [.14, 1.12, -.18], "right-pouch");
+        const leftLeg = limb(group, -.14, .72, .36, .095, uniform, "left-leg");
+        const rightLeg = limb(group, .14, .72, .36, .095, uniform, "right-leg");
+        const leftKnee = limb(leftLeg, 0, -.34, .34, .075, armor, "left-lower-leg");
+        const rightKnee = limb(rightLeg, 0, -.34, .34, .075, armor, "right-lower-leg");
+        const leftArm = limb(group, -.32, 1.34, .31, .073, uniform, "left-arm");
+        const rightArm = limb(group, .32, 1.34, .31, .073, uniform, "right-arm");
+        const leftElbow = limb(leftArm, 0, -.29, .3, .06, armor, "left-forearm");
+        const rightElbow = limb(rightArm, 0, -.29, .3, .06, armor, "right-forearm");
+        leftArm.rotation.x = rightArm.rotation.x = .62;
+        leftElbow.rotation.x = rightElbow.rotation.x = -.3;
+        box([.18, .1, .32], armor, [-.14, .08, -.04], "left-boot");
+        box([.18, .1, .32], armor, [.14, .08, -.04], "right-boot");
+        const botWeapons = new THREE.Group();
+        botWeapons.position.set(0, 1.14, -.28);
+        const botWeaponMaterials = [
+          cachedMaterial("bot-rifle", "#343a31", { metalness: .55 }),
+          cachedMaterial("bot-sniper", "#292f2c", { metalness: .7 }),
+          cachedMaterial("bot-shotgun", "#554b39", { metalness: .45 }),
+          cachedMaterial("bot-smg", "#303932", { metalness: .6 })
+        ];
+        for (let index = 0; index < 4; index++) {
+          const weaponMesh = new THREE.Group();
+          const length = [.4, .58, .48, .3][index];
+          const receiver = new THREE.Mesh(cachedBoxGeometry(.11, .1, .2), botWeaponMaterials[index]);
+          receiver.position.z = .02;
+          const barrel = new THREE.Mesh(cachedBoxGeometry(.045, .045, length), botWeaponMaterials[index]);
+          barrel.position.z = -.13 - length / 2;
+          receiver.castShadow = barrel.castShadow = true;
+          weaponMesh.add(receiver, barrel);
+          botWeapons.add(weaponMesh);
+          weaponMesh.visible = index === enemy.weaponIndex;
+        }
+        botWeapons.traverse(object => { if (object.isMesh) object.userData.enemyRef = enemy; });
+        group.add(botWeapons);
         group.userData.leftLeg = leftLeg;
         group.userData.rightLeg = rightLeg;
         group.userData.leftArm = leftArm;
         group.userData.rightArm = rightArm;
+        group.userData.leftKnee = leftKnee;
+        group.userData.rightKnee = rightKnee;
+        group.userData.leftElbow = leftElbow;
+        group.userData.rightElbow = rightElbow;
+        group.userData.weapons = botWeapons;
         group.traverse(object => { if (object.isMesh) object.userData.enemyRef = enemy; });
         scene.add(group);
         enemyModels.set(enemy, group);
@@ -1375,8 +1575,13 @@
           const gait = enemy.stunned > 0 ? 0 : Math.sin(enemy.phase) * .55;
           model.userData.leftLeg.rotation.x = gait;
           model.userData.rightLeg.rotation.x = -gait;
+          model.userData.leftKnee.rotation.x = Math.max(0, -gait) * .8;
+          model.userData.rightKnee.rotation.x = Math.max(0, gait) * .8;
           model.userData.leftArm.rotation.x = -gait * .55;
           model.userData.rightArm.rotation.x = gait * .55;
+          model.userData.leftElbow.rotation.x = -.3 + Math.max(0, gait) * .35;
+          model.userData.rightElbow.rotation.x = -.3 - Math.max(0, gait) * .35;
+          model.userData.weapons.children.forEach((weapon, index) => { weapon.visible = index === enemy.weaponIndex; });
           model.visible = enemy.health > 0;
         }
       }
@@ -1395,18 +1600,38 @@
           remoteModel.add(mesh);
           return mesh;
         };
-        addPart(cachedBoxGeometry(.48, .78, .3), uniform, [0, 1.05, 0]);
+        addPart(new THREE.CylinderGeometry(.19, .27, .7, 12), uniform, [0, 1.05, 0]);
         const headGeometryKey = "remote-head";
         if (!staticGeometries.has(headGeometryKey)) staticGeometries.set(headGeometryKey, new THREE.SphereGeometry(.2, 12, 8));
         addPart(staticGeometries.get(headGeometryKey), armor, [0, 1.62, 0]);
         addPart(cachedBoxGeometry(.54, .22, .34), armor, [0, 1.22, 0]);
         addPart(cachedBoxGeometry(.3, .035, .035), marker, [0, 1.64, -.18]);
+        const createRemoteLimb = (x, y, length, radius, material) => {
+          const pivot = new THREE.Group();
+          pivot.position.set(x, y, 0);
+          const segment = new THREE.Mesh(new THREE.CylinderGeometry(radius * .8, radius, length, 10), material);
+          segment.position.y = -length / 2;
+          segment.castShadow = true;
+          pivot.add(segment);
+          remoteModel.add(pivot);
+          return pivot;
+        };
+        const leftLeg = createRemoteLimb(-.14, .72, .62, .09, armor);
+        const rightLeg = createRemoteLimb(.14, .72, .62, .09, armor);
+        const leftArm = createRemoteLimb(-.32, 1.35, .58, .07, uniform);
+        const rightArm = createRemoteLimb(.32, 1.35, .58, .07, uniform);
         const weaponMaterial = cachedMaterial("remote-weapon", "#202522", { metalness: .72, roughness: .38 });
         addPart(cachedBoxGeometry(.12, .12, .52), weaponMaterial, [.3, 1.12, -.3]);
         const muzzle = new THREE.PointLight("#ffb65c", 0, 2.5, 2);
         muzzle.position.set(.3, 1.12, -.62);
         remoteModel.add(muzzle);
         remoteModel.userData.muzzleLight = muzzle;
+        remoteModel.userData.leftLeg = leftLeg;
+        remoteModel.userData.rightLeg = rightLeg;
+        remoteModel.userData.leftArm = leftArm;
+        remoteModel.userData.rightArm = rightArm;
+        remoteModel.userData.phase = 0;
+        remoteModel.userData.lastPosition = null;
         scene.add(remoteModel);
         return remoteModel;
       }
@@ -1420,6 +1645,15 @@
         }
         const model = createRemoteModel();
         model.visible = true;
+        const last = model.userData.lastPosition;
+        const distance = last ? Math.hypot(remotePlayer.x - last.x, remotePlayer.y - last.y) : 0;
+        model.userData.phase += distance * 10;
+        const gait = Math.sin(model.userData.phase) * Math.min(.55, distance * 18);
+        model.userData.leftLeg.rotation.x = gait;
+        model.userData.rightLeg.rotation.x = -gait;
+        model.userData.leftArm.rotation.x = -.35 - gait * .5;
+        model.userData.rightArm.rotation.x = -.35 + gait * .5;
+        model.userData.lastPosition = { x: remotePlayer.x, y: remotePlayer.y };
         model.position.set(remotePlayer.x, 0, -remotePlayer.y);
         model.rotation.y = remotePlayer.angle - Math.PI / 2;
         model.userData.muzzleLight.intensity = remotePlayer.firing ? .75 : 0;
@@ -1440,7 +1674,9 @@
             x, y, health: 100, attack: Math.random() * 1.5,
             strafe: Math.random() < .5 ? 1 : -1, phase: Math.random() * Math.PI * 2,
             footstepTimer: Math.random() * .25, sprinting: false,
-            team: gameMode === "tdm" ? (i < 2 ? 0 : 1) : 1
+            team: gameMode === "tdm" ? (i < 2 ? 0 : 1) : 1,
+            weaponIndex: [0, 0, 1, 2, 3][Math.floor(Math.random() * 5)],
+            state: "advance", stateTimer: 1 + Math.random() * 2, cover: null
           });
         }
         document.querySelector("#wave").textContent = isWaveMode()
@@ -1474,10 +1710,121 @@
         return { distance: 20, side: 0, mapX, mapY, rayX, rayY, wallU: 0 };
       }
 
+      function addTracer(start, end, color = "#f3d58c") {
+        const geometry = new THREE.BufferGeometry().setFromPoints([start.clone(), end.clone()]);
+        const material = new THREE.LineBasicMaterial({ color, transparent: true, opacity: .9 });
+        const line = new THREE.Line(geometry, material);
+        line.frustumCulled = false;
+        scene.add(line);
+        transientEffects.push({ object: line, age: 0, duration: .075, type: "tracer" });
+      }
+
+      function addImpactParticles(position, color = "#d8c184") {
+        for (let index = 0; index < 4; index++) {
+          const particle = new THREE.Mesh(
+            new THREE.SphereGeometry(.018, 5, 4),
+            new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 1 })
+          );
+          particle.position.copy(position);
+          scene.add(particle);
+          transientEffects.push({
+            object: particle,
+            velocity: new THREE.Vector3((Math.random() - .5) * 1.8, Math.random() * 1.1, (Math.random() - .5) * 1.8),
+            age: 0,
+            duration: .22,
+            type: "particle"
+          });
+        }
+      }
+
+      function addBlastEffect(position) {
+        const material = new THREE.MeshBasicMaterial({ color: "#ff913d", transparent: true, opacity: .8, depthWrite: false });
+        const blast = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 8), material);
+        blast.position.copy(position);
+        blast.scale.setScalar(.12);
+        scene.add(blast);
+        transientEffects.push({ object: blast, age: 0, duration: .34, type: "blast" });
+      }
+
+      function updateTransientEffects(dt) {
+        for (let index = transientEffects.length - 1; index >= 0; index--) {
+          const effect = transientEffects[index];
+          effect.age += dt;
+          if (effect.type === "ordnance") {
+            const flight = effect.flight;
+            const t = Math.min(1, effect.age / effect.duration);
+            flight.model.position.set(
+              THREE.MathUtils.lerp(flight.startX, flight.impactX, t),
+              .95 + Math.sin(Math.PI * t) * 1.15,
+              -THREE.MathUtils.lerp(flight.startY, flight.impactY, t)
+            );
+            flight.model.rotation.x += dt * 13;
+            flight.model.rotation.z += dt * 9;
+          } else if (effect.type === "particle") {
+            effect.object.position.addScaledVector(effect.velocity, dt);
+            effect.velocity.y -= 2.8 * dt;
+            effect.object.material.opacity = 1 - effect.age / effect.duration;
+          } else if (effect.type === "tracer") {
+            effect.object.material.opacity = 1 - effect.age / effect.duration;
+          } else if (effect.type === "blast") {
+            const progress = effect.age / effect.duration;
+            effect.object.scale.setScalar(.12 + progress * 2.8);
+            effect.object.material.opacity = .8 * (1 - progress);
+          }
+          if (effect.age < effect.duration) continue;
+          scene.remove(effect.object);
+          effect.object.traverse?.(object => object.geometry?.dispose());
+          effect.object.geometry?.dispose();
+          if (Array.isArray(effect.object.material)) effect.object.material.forEach(material => material.dispose());
+          else effect.object.material?.dispose();
+          transientEffects.splice(index, 1);
+        }
+      }
+
+      function updateGrenadeArc() {
+        const points = [];
+        for (let step = 0; step <= 16; step++) {
+          const t = step / 16;
+          const distance = 3.3 * t;
+          const x = player.x + Math.cos(player.angle) * distance;
+          const y = player.y + Math.sin(player.angle) * distance;
+          points.push(new THREE.Vector3(x, 1.05 + Math.sin(Math.PI * t) * 1.15, -y));
+          if (wallAt(x, y)) break;
+        }
+        if (!grenadeArc) {
+          grenadeArc = new THREE.Line(
+            new THREE.BufferGeometry(),
+            new THREE.LineDashedMaterial({ color: "#c1e16d", dashSize: .12, gapSize: .08, transparent: true, opacity: .8 })
+          );
+          scene.add(grenadeArc);
+        }
+        grenadeArc.geometry.dispose();
+        grenadeArc.geometry = new THREE.BufferGeometry().setFromPoints(points);
+        grenadeArc.computeLineDistances();
+        grenadeArc.visible = true;
+      }
+
       function render() {
         updateEnemyModels();
         updateRemoteModel();
-        camera.position.set(player.x, 1.65 - (dashTimer > 0 ? .22 : 0), -player.y);
+        const eyePosition = new THREE.Vector3(player.x, 1.65 - (dashTimer > 0 ? .22 : 0), -player.y);
+        const viewDirection = new THREE.Vector3(
+          Math.cos(player.angle) * Math.cos(playerPitch),
+          Math.sin(playerPitch),
+          -Math.sin(player.angle) * Math.cos(playerPitch)
+        ).normalize();
+        const cameraOffset = viewDirection.clone().multiplyScalar(-.12);
+        camera.position.copy(eyePosition).add(cameraOffset);
+        cameraRaycaster.set(eyePosition, cameraOffset.clone().normalize());
+        cameraRaycaster.near = 0;
+        cameraRaycaster.far = cameraOffset.length();
+        const cameraObstruction = mapGroup ? cameraRaycaster.intersectObject(mapGroup, true)[0] : null;
+        if (cameraObstruction) {
+          camera.position.copy(eyePosition).addScaledVector(
+            cameraOffset.clone().normalize(),
+            Math.max(0, cameraObstruction.distance - camera.near * 1.25)
+          );
+        }
         camera.rotation.set(playerPitch, player.angle - Math.PI / 2, 0);
         audioManager.setEnvironment(activeMapId, isInBattlefieldTrench());
         const flickerTime = performance.now() * .004;
@@ -1488,16 +1835,35 @@
           prop.rotation.y += .004 * (index % 2 ? -1 : 1);
           prop.position.y = prop.userData.baseY + Math.sin(flickerTime * .25 + prop.userData.phase) * .05;
         });
-        camera.fov = aiming ? (currentWeapon().scoped ? 36 : 64) : 72;
+        if (grenadeAim) updateGrenadeArc();
+        else if (grenadeArc) grenadeArc.visible = false;
+        camera.fov = aiming
+          ? currentWeapon().scoped ? 36 : currentWeapon().attachments.optic ? 62 : 72
+          : 72;
         camera.updateProjectionMatrix();
+        const aimWallDistance = castRay(player.angle).distance;
+        aimRaycaster.set(camera.position, viewDirection);
+        aimRaycaster.near = 0;
+        aimRaycaster.far = Math.min(currentWeapon().range || 18, aimWallDistance - .04);
+        const aimTargets = Array.from(enemyModels, ([enemy, model]) => enemy.health > 0 ? model : null).filter(Boolean);
+        const hasAimTarget = aimRaycaster.far > 0 && aimRaycaster.intersectObjects(aimTargets, true).length > 0;
+        document.querySelector("#crosshair").classList.toggle("targeting", hasAimTarget && !currentWeapon().scoped);
+        document.querySelector("#scope-overlay").classList.toggle("targeting", hasAimTarget && currentWeapon().scoped);
         if (weaponAnchor) {
           const moving = movementInput().forward !== 0 || movementInput().strafe !== 0;
           const sprinting = moving && isSprinting();
-          weaponAnchor.position.y = -.3 + Math.sin(movementBob) * (sprinting ? .012 : .006) -
-            weaponRecoil * .0008 - (dashTimer > 0 ? .06 : 0);
-          weaponAnchor.position.x = .32 + Math.sin(performance.now() * .0018) * (moving ? .008 : .003) -
+          const aimOffset = aiming && !currentWeapon().scoped;
+          const targetWeaponPosition = new THREE.Vector3(
+            aimOffset ? .015 : .32,
+            (aimOffset ? -.17 : -.3) + Math.sin(movementBob) * (sprinting ? .012 : .006) -
+            weaponRecoil * .0008 - (dashTimer > 0 ? .06 : 0));
+          targetWeaponPosition.z = -.48 + (aimOffset ? .12 : 0);
+          targetWeaponPosition.x += Math.sin(performance.now() * .0018) * (moving ? .008 : .003) -
             weaponLagX * .00045;
-          weaponAnchor.rotation.x = (dashTimer > 0 ? -.16 : 0) + weaponRecoil * .004;
+          weaponAnchor.position.lerp(targetWeaponPosition, .22);
+          const meleeArc = currentWeapon().melee ? Math.sin((1 - knifeSwing) * Math.PI) : 0;
+          weaponAnchor.rotation.x = (dashTimer > 0 ? -.16 : 0) + weaponRecoil * .004 - meleeArc * .72;
+          weaponAnchor.rotation.y = meleeArc * .62;
           weaponAnchor.rotation.z = dashTimer > 0 ? -.08 : currentWeapon().melee ? -knifeSwing * .32 : 0;
           muzzleLight.intensity = muzzleFlash > 0 ? 3.5 : 0;
           weaponModels.forEach(({ fallback, loaded }, index) => {
@@ -1527,7 +1893,8 @@
           weapon.ammo--;
           muzzleFlash = weapon.scoped ? .18 : .1;
           updateWeaponHud();
-          playSound(player.weaponIndex === 0 ? "rifle" : player.weaponIndex === 1 ? "sniper" : player.weaponIndex === 2 ? "shotgun" : "smg");
+          playSound(player.weaponIndex === 0 ? "rifle" : player.weaponIndex === 1 ? "sniper" : player.weaponIndex === 2 ? "shotgun" : "smg",
+            camera.position, { volume: weapon.attachments.suppressor ? .45 : 1 });
           weaponRecoil = Math.max(weaponRecoil, [9, 20, 15, 5][player.weaponIndex] || 7);
         } else {
           knifeSwing = 1;
@@ -1543,7 +1910,8 @@
         const pelletCount = weapon.melee ? 7 : weapon.pellets || 1;
         const hits = new Map();
         for (let pellet = 0; pellet < pelletCount; pellet++) {
-          const spread = weapon.melee ? .52 : weapon.spread * (aiming ? .45 : 1);
+          const spread = weapon.melee ? .52 :
+            weapon.spread * (aiming ? .45 : 1) * (weapon.attachments.foregrip ? .78 : 1);
           const shotAngle = player.angle + (pelletCount === 1 ? 0 : (Math.random() - .5) * spread);
           const maxDistance = Math.min(weapon.melee ? 1.8 : weapon.range || 18, castRay(shotAngle).distance - .04);
           const targets = enemies
@@ -1563,6 +1931,11 @@
           const target = intersection?.object.userData.enemyRef
             ? { enemy: intersection.object.userData.enemyRef, distance: intersection.distance }
             : null;
+          const tracerEnd = target
+            ? intersection.point.clone()
+            : raycaster.ray.at(maxDistance, new THREE.Vector3());
+          addTracer(camera.position, tracerEnd, target ? "#f5e8b0" : "#dfb96e");
+          if (target) addImpactParticles(tracerEnd, "#f5d992");
           if (target) {
             const previous = hits.get(target.enemy);
             hits.set(target.enemy, { enemy: target.enemy, distance: target.distance, pellets: (previous?.pellets || 0) + 1 });
@@ -1598,7 +1971,31 @@
         setCombatMessage("DASH", 500);
       }
 
+      function findBotCover(enemy) {
+        let best = null;
+        let bestDistance = Infinity;
+        for (let offsetY = -4; offsetY <= 4; offsetY++) {
+          for (let offsetX = -4; offsetX <= 4; offsetX++) {
+            const x = Math.floor(enemy.x) + offsetX + .5;
+            const y = Math.floor(enemy.y) + offsetY + .5;
+            if (wallAt(x, y)) continue;
+            const distanceFromBot = Math.hypot(x - enemy.x, y - enemy.y);
+            if (distanceFromBot < .7 || distanceFromBot > 5 || distanceFromBot >= bestDistance) continue;
+            const dx = player.x - x, dy = player.y - y;
+            const distanceFromPlayer = Math.hypot(dx, dy);
+            if (castRayFrom(x, y, Math.atan2(dy, dx)).distance < distanceFromPlayer - .2) {
+              best = { x, y };
+              bestDistance = distanceFromBot;
+            }
+          }
+        }
+        return best;
+      }
+
       function update(dt) {
+        updateTransientEffects(dt);
+        const nearbyThreats = enemies.filter(enemy => Math.hypot(enemy.x - player.x, enemy.y - player.y) < 12).length;
+        audioManager.setCombatIntensity(Math.min(1, nearbyThreats / 4));
         fireCooldown = Math.max(0, fireCooldown - dt);
         muzzleFlash = Math.max(0, muzzleFlash - dt);
         knifeSwing = Math.max(0, knifeSwing - dt * 4);
@@ -1658,41 +2055,91 @@
         if (correction.x || correction.y) movePlayer(correction.x, correction.y);
 
         for (const enemy of enemies) {
-          const dx = player.x - enemy.x, dy = player.y - enemy.y, distance = Math.hypot(dx, dy);
-          enemy.phase += dt * (distance > 1.15 ? 7 : 2);
+          const dx = player.x - enemy.x, dy = player.y - enemy.y;
+          const distance = Math.max(.001, Math.hypot(dx, dy));
+          const weapon = weapons[enemy.weaponIndex] || weapons[0];
+          enemy.facingX = dx / distance;
+          enemy.facingY = dy / distance;
+          enemy.phase += dt * (distance > 1.15 ? (enemy.sprinting ? 11 : 7) : 2);
           enemy.stunned = Math.max(0, (enemy.stunned || 0) - dt);
           enemy.attack -= dt;
+          enemy.stateTimer -= dt;
           enemy.footstepTimer = Math.max(0, enemy.footstepTimer - dt);
           if (enemy.stunned > 0) continue;
-          if (distance > 1.15) {
-            enemy.sprinting = distance > 3.5;
-            const approach = distance > 3 ? 1 : .35;
-            const vx = (dx / distance * approach + -dy / distance * .18 * enemy.strafe) * dt * .68;
-            const vy = (dy / distance * approach + dx / distance * .18 * enemy.strafe) * dt * .68;
-            if (!wallAt(enemy.x + vx, enemy.y)) enemy.x += vx;
-            if (!wallAt(enemy.x, enemy.y + vy)) enemy.y += vy;
+          if (enemy.stateTimer <= 0) {
+            enemy.stateTimer = 2.2 + Math.random() * 2.4;
+            if (enemy.health < 42 && Math.random() < .55) {
+              enemy.cover = findBotCover(enemy);
+              enemy.state = enemy.cover ? "cover" : "retreat";
+            } else {
+              enemy.state = ["advance", "flank", "engage"][Math.floor(Math.random() * 3)];
+              if (enemy.state === "flank") enemy.strafe *= -1;
+            }
+          }
+          const lineOfSight = castRayFrom(enemy.x, enemy.y, Math.atan2(dy, dx)).distance >= distance - .25;
+          const weaponRange = weapon.range || 12;
+          if (enemy.state !== "cover" && distance < weaponRange * .48) enemy.state = "flank";
+          let moveX = 0, moveY = 0;
+          if (enemy.state === "cover" && enemy.cover) {
+            const coverDx = enemy.cover.x - enemy.x, coverDy = enemy.cover.y - enemy.y;
+            const coverDistance = Math.hypot(coverDx, coverDy);
+            if (coverDistance < .22) {
+              enemy.state = "engage";
+              enemy.cover = null;
+            } else {
+              moveX = coverDx / coverDistance;
+              moveY = coverDy / coverDistance;
+            }
+          } else if (enemy.state === "retreat") {
+            moveX = -dx / distance;
+            moveY = -dy / distance;
+          } else if (distance > weaponRange * (enemy.state === "engage" ? .62 : .78)) {
+            enemy.state = "advance";
+            moveX = dx / distance;
+            moveY = dy / distance;
+          } else if (enemy.state === "flank") {
+            moveX = -dy / distance * enemy.strafe;
+            moveY = dx / distance * enemy.strafe;
+          }
+          if (moveX || moveY) {
+            const speed = enemy.state === "cover" || enemy.state === "retreat" ? .78 : .68;
+            const flankAmount = enemy.state === "advance" ? .1 : .32;
+            const vx = (moveX - dy / distance * flankAmount * enemy.strafe) * dt * speed;
+            const vy = (moveY + dx / distance * flankAmount * enemy.strafe) * dt * speed;
+            enemy.sprinting = distance > 4 && enemy.state === "advance";
+            if (!wallAt(enemy.x + vx, enemy.y) && canOccupyOnMap(map, enemy.x + vx, enemy.y, .2)) enemy.x += vx;
+            if (!wallAt(enemy.x, enemy.y + vy) && canOccupyOnMap(map, enemy.x, enemy.y + vy, .2)) enemy.y += vy;
             if (enemy.footstepTimer <= 0) {
               playSound("footstep", new THREE.Vector3(enemy.x, .1, -enemy.y), {
                 volume: enemy.sprinting ? 1.15 : .72, refDistance: 1.8, rolloffFactor: 1.6
               });
               enemy.footstepTimer = enemy.sprinting ? .28 : .42;
             }
-          } else if (enemy.attack <= 0 && castRayFrom(enemy.x, enemy.y, Math.atan2(dy, dx)).distance >= distance - .25) {
+          } else {
             enemy.sprinting = false;
-            enemy.attack = 1.8 + Math.random() * .8;
-            player.health = Math.max(0, player.health - 6);
-            hurtFlash = .8;
-            damageMessageTimer = .3;
-            playSound("damage");
-            document.querySelector("#damage-overlay").classList.add("visible");
-            setTimeout(() => document.querySelector("#damage-overlay").classList.remove("visible"), 300);
-            document.querySelector("#health").textContent = player.health;
-            const fill = document.querySelector("#health-fill");
-            fill.style.width = `${player.health}%`;
-            fill.style.background = player.health < 35 ? "#dd6d58" : "#c1e16d";
-            if (player.health === 0) {
-              playSound("death");
-              endGame();
+          }
+          if (enemy.attack <= 0 && lineOfSight && distance <= weaponRange) {
+            enemy.attack = Math.max(1.2, weapon.interval * 7) + Math.random() * .45;
+            const closeAttack = distance <= 1.15;
+            if (closeAttack || Math.random() < .58) {
+              const damage = closeAttack ? 6 : Math.max(3, weapon.damage * (enemy.weaponIndex === 1 ? .075 : .045));
+              player.health = Math.max(0, player.health - Math.round(damage));
+              hurtFlash = .8;
+              damageMessageTimer = .3;
+              playSound(closeAttack ? "damage" : enemy.weaponIndex === 1 ? "sniper" : "rifle",
+                new THREE.Vector3(enemy.x, 1.2, -enemy.y), { volume: .45, refDistance: 3 });
+              addTracer(new THREE.Vector3(enemy.x, 1.25, -enemy.y), new THREE.Vector3(player.x, 1.25, -player.y), "#ff9b72");
+              document.querySelector("#damage-overlay").classList.add("visible");
+              setTimeout(() => document.querySelector("#damage-overlay").classList.remove("visible"), 300);
+              document.querySelector("#health").textContent = player.health;
+              const fill = document.querySelector("#health-fill");
+              fill.style.width = `${player.health}%`;
+              fill.style.background = player.health < 35 ? "#dd6d58" : "#c1e16d";
+              if (player.health === 0) {
+                playSound("death");
+                endGame();
+                break;
+              }
             }
           }
         }
@@ -1780,8 +2227,10 @@
       function pauseGame() {
         if (!running || gameOver) return;
         running = false;
+        audioManager.setCombatIntensity(0);
         firing = false;
         aiming = false;
+        grenadeAim = false;
         dashTimer = 0;
         resetTouchControls();
         keys.clear();
@@ -1800,6 +2249,7 @@
 
       function endGame() {
         running = false; gameOver = true;
+        audioManager.setCombatIntensity(0);
         firing = false;
         aiming = false;
         overlay.hidden = false;
@@ -1899,10 +2349,23 @@
           if (running) selectWeapon(Number(button.dataset.weapon));
         });
       });
+      document.querySelector("#loadout-weapon").addEventListener("change", event => {
+        loadoutWeaponIndex = Number(event.currentTarget.value);
+        updateLoadoutControls();
+      });
+      document.querySelectorAll("[data-attachment]").forEach(input => {
+        input.addEventListener("change", event => {
+          const attachment = event.currentTarget.dataset.attachment;
+          weapons[loadoutWeaponIndex].attachments[attachment] = event.currentTarget.checked;
+          applyWeaponAttachments(loadoutWeaponIndex);
+          if (loadoutWeaponIndex === player.weaponIndex && aiming) updateAimHud();
+        });
+      });
       window.addEventListener("resize", resize);
       window.addEventListener("keydown", event => {
         keys.add(event.code);
         if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.code)) event.preventDefault();
+        if (event.code === "Escape" && event.repeat) return;
         if (event.altKey && event.code === "Enter") {
           event.preventDefault();
           toggleFullscreen();
@@ -1910,12 +2373,31 @@
         }
         if (event.code === "Escape") {
           event.preventDefault();
+          const now = performance.now();
+          if (lastEscapePress > 0 && now - lastEscapePress <= 2000) {
+            lastEscapePress = 0;
+            const shouldBeRunning = escapeRunningBeforeFirst;
+            escapeRunningBeforeFirst = false;
+            suppressPointerLockPauseUntil = now + 500;
+            if (document.fullscreenElement) toggleFullscreen();
+            if (shouldBeRunning && !running && !gameOver) startGame(gameMode, false);
+            else if (!shouldBeRunning && running) pauseGame();
+            return;
+          }
+          const pointerLockWasJustLost = now - pointerLockPauseAt <= 120;
+          escapeRunningBeforeFirst = running || pointerLockWasJustLost;
+          lastEscapePress = now;
           if (running) pauseGame();
+          else if (pointerLockWasJustLost) return;
+          else if (!gameOver && !overlay.hidden) startGame(gameMode, false);
           return;
         }
         if (!running || event.repeat) return;
         if (event.code === "KeyR") reload();
-        if (event.code === "KeyG") addGrenade(false);
+        if (event.code === "KeyG") {
+          grenadeAim = true;
+          return;
+        }
         if (event.code === "KeyF") addGrenade(true);
         if (event.code === "KeyC") startDash();
         if (event.code.startsWith("Digit")) {
@@ -1923,7 +2405,13 @@
           selectWeapon(index);
         }
       });
-      window.addEventListener("keyup", event => keys.delete(event.code));
+      window.addEventListener("keyup", event => {
+        keys.delete(event.code);
+        if (event.code === "KeyG" && grenadeAim) {
+          grenadeAim = false;
+          addGrenade(false);
+        }
+      });
       const touchStick = document.querySelector("#touch-stick");
       const touchStickKnob = document.querySelector("#touch-stick-knob");
       touchStick.addEventListener("pointerdown", event => {
@@ -2066,6 +2554,7 @@
       window.addEventListener("blur", () => {
         firing = false;
         aiming = false;
+        grenadeAim = false;
         updateAimHud();
         keys.clear();
         resetTouchControls();
@@ -2080,7 +2569,14 @@
         }
       });
       document.addEventListener("pointerlockchange", () => {
-        if (document.pointerLockElement !== canvas && running) pauseGame();
+        if (document.pointerLockElement !== canvas && running) {
+          if (performance.now() <= suppressPointerLockPauseUntil) {
+            suppressPointerLockPauseUntil = 0;
+            return;
+          }
+          pointerLockPauseAt = performance.now();
+          pauseGame();
+        }
       });
       document.addEventListener("pointerlockerror", () => { pointerLockUnavailable = true; });
 
@@ -2089,6 +2585,7 @@
       document.querySelector("#grenade-count").textContent = grenades;
       document.querySelector("#flash-count").textContent = flashbangs;
       syncSettingsControls();
+      updateLoadoutControls();
       resize();
       if ("ResizeObserver" in window) {
         new ResizeObserver(resize).observe(document.querySelector(".stage"));
