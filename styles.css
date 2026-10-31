@@ -96,22 +96,35 @@
     .crosshair.targeting::before, .crosshair.targeting::after {
       background: #c1e16d; box-shadow: 0 0 7px #c1e16d;
     }
-    .hit-marker { position: absolute; inset: 0; opacity: 0; transition: opacity .08s; pointer-events: none; }
+    .hit-marker { position: absolute; inset: 0; opacity: 0; pointer-events: none; transform-origin: center; }
     .hit-marker::before, .hit-marker::after {
       content: ""; position: absolute; left: 50%; top: 50%; width: 16px; height: 2px;
       background: #fff; transform: translate(-50%, -50%) rotate(45deg);
     }
     .hit-marker::after { transform: translate(-50%, -50%) rotate(-45deg); }
-    .hit-marker.visible { opacity: 1; }
+    .hit-marker.visible { animation: hit-marker-pop-fade 1s ease-out both; }
+    @keyframes hit-marker-pop-fade {
+      0% { opacity: 0; transform: scale(.65); }
+      13% { opacity: 1; transform: scale(1.18); }
+      28% { opacity: 1; transform: scale(1); }
+      78% { opacity: 1; transform: scale(1); }
+      100% { opacity: 0; transform: scale(.92); }
+    }
     .hit-confirmation {
-      position: absolute; left: 50%; top: calc(50% + 24px); transform: translateX(-50%);
+      position: absolute; left: 50%; top: calc(50% + 24px); transform: translateX(-50%) scale(.8);
       display: flex; align-items: center; gap: 5px; color: #d3ef87;
       font-size: 9px; font-weight: 800; letter-spacing: .16em;
       text-shadow: 0 2px 6px #000; opacity: 0; pointer-events: none;
-      transition: opacity .12s;
     }
     .hit-confirmation svg { width: 18px; height: 18px; fill: currentColor; }
-    .hit-confirmation.visible { opacity: 1; }
+    .hit-confirmation.visible { animation: hit-confirmation-pop-fade 1s ease-out both; }
+    @keyframes hit-confirmation-pop-fade {
+      0% { opacity: 0; transform: translateX(-50%) scale(.65); }
+      13% { opacity: 1; transform: translateX(-50%) scale(1.15); }
+      28% { opacity: 1; transform: translateX(-50%) scale(1); }
+      78% { opacity: 1; transform: translateX(-50%) scale(1); }
+      100% { opacity: 0; transform: translateX(-50%) scale(.92); }
+    }
     .hit-confirmation.no-scope { color: #f1d78f; }
     .replay-indicator {
       position: absolute; z-index: 3; left: 50%; top: 12%;
@@ -289,6 +302,19 @@
     .menu-actions--row { grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 8px 0; }
     .server-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; text-align: left; }
     .server-toolbar button { flex: 0 0 auto; margin: 0; padding: 9px 12px; font-size: 9px; }
+    .server-toolbar .prototype-note { flex: 1 1 220px; }
+    .room-config-panel {
+      display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px 12px;
+      margin: 12px 0; padding: 12px; border: 1px solid #53604e; background: #10151080;
+      text-align: left;
+    }
+    .room-config-panel[hidden] { display: none; }
+    .room-config-panel .kicker, .room-config-panel .form-label { grid-column: 1 / -1; margin: 0; }
+    .room-config-panel select {
+      width: 100%; padding: 9px; border: 1px solid #53604e;
+      background: #202820; color: #e4e9dc; font: inherit;
+    }
+    #apply-room-config-button { grid-column: 1 / -1; margin: 2px 0 0; }
     .room-join-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
     .room-join-row button { margin: 0; padding: 10px 14px; }
     .server-content { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; min-height: 180px; margin-top: 12px; text-align: left; }

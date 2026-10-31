@@ -46,6 +46,7 @@ export class AudioManager {
     const presets = {
       rifle: [105, .11, .24, .38], sniper: [64, .3, .34, .58],
       shotgun: [78, .18, .32, .48], smg: [128, .06, .16, .26],
+      suppressed: [72, .12, .12, .68],
       knife: [240, .08, .12, .16], reload: [340, .12, .05, .12],
       damage: [72, .24, .12, .32], death: [48, .7, .16, .72],
       grenade: [55, .4, .3, .92], flash: [880, .22, .09, .4],

@@ -1,12 +1,32 @@
+import { DecalManager } from "./DecalManager.js";
+
 export class VFXSystem {
-  constructor(engine, scene, { bulletCapacity = 80, decalCapacity = 128 } = {}) {
+  constructor(engine, scene, { bulletCapacity = 80, particleCapacity = 256 } = {}) {
     this.engine = engine;
     this.scene = scene;
     this.bullets = [];
     this.tracers = [];
-    this.particles = [];
-    this.lights = [];
+    this.particles = Array.from({ length: particleCapacity }, () => ({
+      active: false,
+      position: new engine.Vector3(),
+      velocity: new engine.Vector3(),
+      remaining: 0,
+      duration: 0,
+      scale: 0,
+      endScale: 0,
+      gravity: 0,
+      expanding: false
+    }));
+    this.lights = Array.from({ length: 8 }, () => {
+      const light = new engine.PointLight("#ffc76b", 0, 3, 2);
+      light.visible = false;
+      scene.add(light);
+      return { light, remaining: 0, duration: .055 };
+    });
     this.dummy = new engine.Object3D();
+    this.identityQuaternion = new engine.Quaternion();
+    this.hiddenPosition = new engine.Vector3(0, -1000, 0);
+    this.zeroVelocity = new engine.Vector3();
     this.bulletGeometry = this.withBounds(new engine.SphereGeometry(.012, 6, 4));
     this.bulletPool = new engine.InstancedMesh(
       this.bulletGeometry,
@@ -22,21 +42,21 @@ export class VFXSystem {
       this.bullets.push({ active: false, position: new engine.Vector3(), velocity: new engine.Vector3(), remaining: 0 });
     }
 
-    this.decalMesh = new engine.InstancedMesh(
-      this.withBounds(new engine.PlaneGeometry(1, 1)),
-      new engine.MeshBasicMaterial({ color: "#ffffff", transparent: true, depthTest: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1 }),
-      decalCapacity
+    this.particleGeometry = this.withBounds(new engine.SphereGeometry(1, 8, 6));
+    this.particlePool = new engine.InstancedMesh(
+      this.particleGeometry,
+      new engine.MeshBasicMaterial({ color: "#ffffff", transparent: true, opacity: .9, depthWrite: false }),
+      particleCapacity
     );
-    this.decalMesh.frustumCulled = false;
-    this.decalMesh.instanceMatrix.setUsage(engine.DynamicDrawUsage);
-    this.decalMesh.userData.capacity = decalCapacity;
-    this.decalCapacity = decalCapacity;
-    this.decalIndex = 0;
-    this.scene.add(this.decalMesh);
-    for (let index = 0; index < decalCapacity; index++) {
-      this.setInstance(this.decalMesh, index, new engine.Vector3(0, -1000, 0), new engine.Quaternion(), .001);
+    this.particlePool.frustumCulled = false;
+    this.particlePool.instanceMatrix.setUsage(engine.DynamicDrawUsage);
+    this.particlePool.userData.capacity = particleCapacity;
+    this.scene.add(this.particlePool);
+    for (let index = 0; index < particleCapacity; index++) {
+      this.setInstance(this.particlePool, index, this.hiddenPosition, this.identityQuaternion, .001);
     }
-    this.flashTexture = this.createFlashTexture();
+
+    this.decals = new DecalManager(engine, scene);
   }
 
   withBounds(geometry) {
@@ -53,19 +73,6 @@ export class VFXSystem {
     this.dummy.updateMatrix();
     mesh.setMatrixAt(index, this.dummy.matrix);
     mesh.instanceMatrix.needsUpdate = true;
-  }
-
-  createFlashTexture() {
-    const canvas = document.createElement("canvas");
-    canvas.width = canvas.height = 64;
-    const context = canvas.getContext("2d");
-    const gradient = context.createRadialGradient(32, 32, 2, 32, 32, 32);
-    gradient.addColorStop(0, "rgba(255,255,255,1)");
-    gradient.addColorStop(.35, "rgba(255,232,174,.85)");
-    gradient.addColorStop(1, "rgba(255,145,48,0)");
-    context.fillStyle = gradient;
-    context.fillRect(0, 0, 64, 64);
-    return new this.engine.CanvasTexture(canvas);
   }
 
   spawnBullet(origin, destination, { color = "#f5d992", speed = 180 } = {}) {
@@ -100,53 +107,109 @@ export class VFXSystem {
   }
 
   spawnImpact(position, normal, color = "#44392d", size = .11) {
-    const index = this.decalIndex;
-    const direction = normal.clone().normalize();
-    const quaternion = new this.engine.Quaternion().setFromUnitVectors(new this.engine.Vector3(0, 0, 1), direction);
-    this.decalMesh.setColorAt(index, new this.engine.Color(color));
-    this.setInstance(this.decalMesh, index, position.clone().addScaledVector(direction, .003), quaternion, size);
-    this.decalMesh.instanceColor.needsUpdate = true;
-    this.decalIndex = (index + 1) % this.decalCapacity;
+    this.decals.add(position, normal, size, color);
+  }
+
+  clearDecals() {
+    this.decals.clear();
+  }
+
+  updateDecals(now) {
+    this.decals.update(now);
+  }
+
+  spawnParticle(position, {
+    velocity = null,
+    duration = .22,
+    scale = .018,
+    endScale = 0,
+    gravity = 2.8,
+    color = "#d8c184",
+    expanding = false
+  } = {}) {
+    const particle = this.particles.find(item => !item.active) ||
+      this.particles.reduce((oldest, item) => item.remaining < oldest.remaining ? item : oldest);
+    const index = this.particles.indexOf(particle);
+    particle.active = true;
+    particle.position.copy(position);
+    particle.velocity.copy(velocity || this.zeroVelocity);
+    particle.remaining = duration;
+    particle.duration = duration;
+    particle.scale = scale;
+    particle.endScale = endScale;
+    particle.gravity = gravity;
+    particle.expanding = expanding;
+    this.setInstance(this.particlePool, index, particle.position, this.identityQuaternion, scale);
+    this.particlePool.setColorAt(index, new this.engine.Color(color));
+    this.particlePool.instanceColor.needsUpdate = true;
+    return true;
   }
 
   addImpactParticles(position, color = "#d8c184") {
     for (let index = 0; index < 4; index++) {
-      const particle = new this.engine.Mesh(
-        this.withBounds(new this.engine.SphereGeometry(.018, 5, 4)),
-        new this.engine.MeshBasicMaterial({ color, transparent: true, opacity: 1 })
-      );
-      particle.position.copy(position);
-      this.scene.add(particle);
-      this.particles.push({
-        object: particle,
+      this.spawnParticle(position, {
         velocity: new this.engine.Vector3((Math.random() - .5) * 1.8, Math.random() * 1.1, (Math.random() - .5) * 1.8),
-        remaining: .22,
-        duration: .22
+        color,
+        scale: .018
+      });
+    }
+  }
+
+  spawnBlood(position) {
+    for (let index = 0; index < 12; index++) {
+      const direction = new this.engine.Vector3(
+        Math.random() * 2 - 1,
+        Math.random() * 1.4 + .25,
+        Math.random() * 2 - 1
+      ).normalize();
+      this.spawnParticle(position, {
+        velocity: direction.multiplyScalar(1.2 + Math.random() * 2),
+        color: "#7f2522",
+        duration: .65,
+        scale: .025,
+        gravity: 3.8
       });
     }
   }
 
   spawnMuzzleFlash(position) {
-    const light = new this.engine.PointLight("#ffc76b", 3.5, 3, 2);
-    light.position.copy(position);
-    this.scene.add(light);
-    const sprite = new this.engine.Sprite(new this.engine.SpriteMaterial({
-      map: this.flashTexture, color: "#ffd987", transparent: true, blending: this.engine.AdditiveBlending, depthWrite: false
-    }));
-    sprite.position.copy(position);
-    sprite.scale.set(.34, .34, 1);
-    this.scene.add(sprite);
-    this.lights.push({ light, sprite, remaining: .055 });
+    this.spawnParticle(position, {
+      color: "#ffd987",
+      duration: .055,
+      scale: .17,
+      gravity: 0
+    });
+    const flash = this.lights.find(item => item.remaining <= 0) ||
+      this.lights.reduce((oldest, item) => item.remaining < oldest.remaining ? item : oldest);
+    flash.light.position.copy(position);
+    flash.light.intensity = 3.5;
+    flash.light.visible = true;
+    flash.remaining = flash.duration;
   }
 
   spawnExplosion(position, color = "#ff913d") {
-    const material = new this.engine.MeshBasicMaterial({ color, transparent: true, opacity: .8, depthWrite: false });
-    const blast = new this.engine.Mesh(this.withBounds(new this.engine.SphereGeometry(1, 12, 8)), material);
-    blast.position.copy(position);
-    blast.scale.setScalar(.12);
-    this.scene.add(blast);
-    this.particles.push({ object: blast, remaining: .34, duration: .34, blast: true });
-    this.addImpactParticles(position, color);
+    this.spawnParticle(position, {
+      color,
+      duration: .4,
+      scale: .12,
+      endScale: 2.9,
+      gravity: 0,
+      expanding: true
+    });
+    for (let index = 0; index < 18; index++) {
+      const direction = new this.engine.Vector3(
+        Math.random() * 2 - 1,
+        Math.random() * 2 - .45,
+        Math.random() * 2 - 1
+      ).normalize();
+      this.spawnParticle(position, {
+        velocity: direction.multiplyScalar(2 + Math.random() * 5),
+        color: index % 3 ? color : "#ffd98a",
+        duration: .55 + Math.random() * .35,
+        scale: .025 + Math.random() * .025,
+        gravity: 5.2
+      });
+    }
   }
 
   update(dt) {
@@ -179,32 +242,63 @@ export class VFXSystem {
       tracer.object.material.dispose();
       this.tracers.splice(index, 1);
     }
+    let activeParticles = false;
     for (let index = this.particles.length - 1; index >= 0; index--) {
       const particle = this.particles[index];
+      if (!particle.active) continue;
       particle.remaining -= dt;
       const progress = 1 - particle.remaining / particle.duration;
-      if (particle.blast) {
-        particle.object.scale.setScalar(.12 + progress * 2.8);
-        particle.object.material.opacity = .8 * (1 - progress);
+      if (particle.expanding) {
+        const growth = particle.scale + (particle.endScale - particle.scale) * progress;
+        const fade = progress > .72 ? (1 - progress) / .28 : 1;
+        this.setInstance(
+          this.particlePool,
+          index,
+          particle.position,
+          this.identityQuaternion,
+          Math.max(.001, growth * fade)
+        );
       } else {
-        particle.object.position.addScaledVector(particle.velocity, dt);
-        particle.velocity.y -= 2.8 * dt;
-        particle.object.material.opacity = Math.max(0, 1 - progress);
+        particle.position.addScaledVector(particle.velocity, dt);
+        particle.velocity.y -= particle.gravity * dt;
+        this.setInstance(
+          this.particlePool,
+          index,
+          particle.position,
+          this.identityQuaternion,
+          Math.max(.001, particle.scale * (1 - progress))
+        );
       }
+      activeParticles = true;
       if (particle.remaining > 0) continue;
-      this.scene.remove(particle.object);
-      particle.object.geometry.dispose();
-      particle.object.material.dispose();
-      this.particles.splice(index, 1);
+      particle.active = false;
+      this.setInstance(
+        this.particlePool,
+        index,
+        this.hiddenPosition,
+        this.identityQuaternion,
+        .001
+      );
     }
+    if (activeParticles) this.particlePool.instanceMatrix.needsUpdate = true;
     for (let index = this.lights.length - 1; index >= 0; index--) {
       const flash = this.lights[index];
+      if (flash.remaining <= 0) continue;
       flash.remaining -= dt;
-      flash.light.intensity = Math.max(0, flash.remaining / .055) * 3.5;
+      flash.light.intensity = Math.max(0, flash.remaining / flash.duration) * 3.5;
       if (flash.remaining > 0) continue;
-      this.scene.remove(flash.light, flash.sprite);
-      flash.sprite.material.dispose();
-      this.lights.splice(index, 1);
+      flash.light.intensity = 0;
+      flash.light.visible = false;
     }
+  }
+
+  dispose() {
+    this.decals.dispose();
+    this.scene.remove(this.bulletPool, this.particlePool);
+    this.lights.forEach(({ light }) => this.scene.remove(light));
+    this.bulletGeometry.dispose();
+    this.particleGeometry.dispose();
+    this.bulletPool.material.dispose();
+    this.particlePool.material.dispose();
   }
 }

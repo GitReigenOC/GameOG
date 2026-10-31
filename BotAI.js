@@ -74,12 +74,12 @@ export class BotAI {
     const dx = player.x - enemy.x;
     const dy = player.y - enemy.y;
     const distance = Math.max(.001, Math.hypot(dx, dy));
-    const targetCell = `${Math.floor(player.x)},${Math.floor(player.y)}`;
     enemy.attack = Math.max(0, enemy.attack - dt);
     enemy.stateTimer = Math.max(0, (enemy.stateTimer || 0) - dt);
     enemy.repathTimer = Math.max(0, (enemy.repathTimer || 0) - dt);
     enemy.facingX = dx / distance;
     enemy.facingY = dy / distance;
+    const hasLineOfSight = this.hasLineOfSight(grid, enemy, player);
 
     if (enemy.underFire) {
       enemy.underFire = false;
@@ -91,23 +91,31 @@ export class BotAI {
     }
 
     if (enemy.stateTimer <= 0) {
-      const needsCover = enemy.health < 42 && Math.random() < .6;
+      const needsCover = enemy.health / (enemy.maxHealth || 100) < .45 && Math.random() < .7;
       if (needsCover) {
         enemy.cover = this.findCover(grid, enemy, player);
         enemy.state = enemy.cover ? "cover" : "dodge";
       } else {
-        enemy.state = ["seek", "attack", "dodge"][Math.floor(Math.random() * 3)];
+        enemy.cover = null;
+        enemy.state = hasLineOfSight && distance <= weapon.range * .88
+          ? Math.random() < .25 ? "dodge" : "attack"
+          : "seek";
         if (enemy.state === "dodge") enemy.strafe *= -1;
       }
-      enemy.stateTimer = 1.8 + Math.random() * 2.2;
+      enemy.stateTimer = 1.4 + Math.random() * 1.8;
     }
 
-    const hasLineOfSight = this.hasLineOfSight(grid, enemy, player);
-    if (enemy.state === "attack" && hasLineOfSight && distance <= weapon.range * .88) {
+    if (enemy.state === "attack" && (!hasLineOfSight || distance > weapon.range * .95)) {
+      enemy.state = "seek";
+      enemy.stateTimer = .5;
+    }
+
+    if (enemy.state === "attack" && hasLineOfSight && distance <= weapon.range) {
+      const strafe = enemy.type === "brute" ? .12 : .32;
       return {
         state: enemy.state,
-        moveX: 0,
-        moveY: 0,
+        moveX: -enemy.facingY * enemy.strafe * strafe,
+        moveY: enemy.facingX * enemy.strafe * strafe,
         sprinting: false,
         fire: enemy.attack <= 0,
         distance,
@@ -116,7 +124,7 @@ export class BotAI {
     }
 
     let destination = player;
-    let lateral = enemy.strafe * .22;
+    let lateral = enemy.strafe * (enemy.type === "brute" ? .08 : .2);
     if ((enemy.state === "cover" || enemy.state === "dodge") && enemy.cover) {
       destination = enemy.cover;
       lateral = 0;
@@ -145,11 +153,18 @@ export class BotAI {
     const moveLength = Math.hypot(moveX, moveY) || 1;
     moveX /= moveLength;
     moveY /= moveLength;
-    if (hasLineOfSight && distance <= weapon.range * .88) enemy.state = "attack";
-    if ((enemy.state === "cover" || enemy.state === "dodge") &&
-      Math.hypot(enemy.cover?.x - enemy.x || 0, enemy.cover?.y - enemy.y || 0) < .3) {
-      enemy.state = "attack";
-      enemy.cover = null;
+    const reachedCover = enemy.cover &&
+      Math.hypot(enemy.cover.x - enemy.x, enemy.cover.y - enemy.y) < .3;
+    if ((enemy.state === "cover" || enemy.state === "dodge") && reachedCover) {
+      return {
+        state: "cover",
+        moveX: 0,
+        moveY: 0,
+        sprinting: false,
+        fire: hasLineOfSight && distance <= weapon.range && enemy.attack <= 0,
+        distance,
+        hasLineOfSight
+      };
     }
 
     return {

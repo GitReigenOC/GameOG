@@ -148,7 +148,25 @@ description: A browser-based tactical arena training game.
           <div class="server-toolbar">
             <span class="prototype-note">Share the invite code with one player. Both players need an internet connection.</span>
             <button type="button" id="create-room-button" class="button-secondary">Create private room</button>
+            <button type="button" id="configure-room-button" class="button-secondary" disabled>Configure current room</button>
           </div>
+          <section class="room-config-panel" id="room-config-panel" aria-label="Configure active room" hidden>
+            <div class="kicker">ACTIVE ROOM CONFIGURATION</div>
+            <label class="form-label" for="room-mode-setting">MATCH MODE</label>
+            <select id="room-mode-setting">
+              <option value="ffa-waves">Co-op waves</option>
+              <option value="duel">1 vs 1</option>
+              <option value="ffa">Free-for-all</option>
+              <option value="tdm">Team deathmatch</option>
+            </select>
+            <label class="form-label" for="room-map-setting">MAP</label>
+            <select id="room-map-setting">
+              <option value="arena">Tactical Arena</option>
+              <option value="battlefield">Battlefield</option>
+              <option value="pool">The Pool Rooms</option>
+            </select>
+            <button type="button" id="apply-room-config-button">Apply to active room</button>
+          </section>
           <label class="form-label" for="room-code-input">ROOM INVITE CODE</label>
           <div class="room-join-row">
             <input id="room-code-input" maxlength="24" autocomplete="off" placeholder="Enter the host's room code">
@@ -189,9 +207,9 @@ description: A browser-based tactical arena training game.
             <span class="setting-hint">Lower for finer aim · Higher for quicker turns</span>
           </label>
           <label class="setting-row" for="scope-sensitivity-setting">
-            <span>Scoped sensitivity <output id="scope-sensitivity-value" for="scope-sensitivity-setting">0.44×</output></span>
-            <input id="scope-sensitivity-setting" type="range" min="0.2" max="1" step="0.02" value="0.44">
-            <span class="setting-hint">Multiplies your mouse sensitivity while scoped</span>
+            <span>Scoped sensitivity <output id="scope-sensitivity-value" for="scope-sensitivity-setting">0.25×</output></span>
+            <input id="scope-sensitivity-setting" type="range" min="0.1" max="1" step="0.02" value="0.25">
+            <span class="setting-hint">Scoped look speed multiplier; lower values steady long-range aim</span>
           </label>
           <label class="setting-row" for="fov-setting">
             <span>Field of view <output id="fov-value" for="fov-setting">82°</output></span>

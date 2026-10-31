@@ -10,22 +10,43 @@ Place the weapon models in this directory using these filenames:
 | 4 — SMG | `smg.glb` |
 | 5 — Knife | `knife.glb` |
 
-The game loads these files with Three.js `GLTFLoader`. The manifest currently uses
-`.glb`; to use `.gltf`, change the corresponding path in `game.js` and keep any
-external textures or buffers alongside the GLTF file.
-Models are attached to the camera for the first-person view and should be authored
-facing local negative Z, with their grip near the origin. The loader applies an
-initial scale of `0.5` (`0.42` for the knife); adjust the scale in `initializeWeapons`
-if an asset uses different dimensions.
+`WeaponAssetLoader.js` loads GLB or GLTF assets with Three.js `GLTFLoader`. It
+automatically scales each model to fit the first-person view. Models should face
+local negative Z, with the grip near their origin. Give muzzle nodes names such
+as `Muzzle`, `BarrelTip`, or `Barrel_End` to place the visual tracer at the
+correct location; otherwise configure a local `muzzle` offset.
 
-Until a model file is present and loads successfully, the corresponding built-in
-3D weapon remains visible.
+The default model paths are relative to the site root. To use different freely
+licensed assets, set `window.BLACKSITE_WEAPON_ASSETS` before `main.js` loads:
 
-The built-in models use the game's procedural dark composite finish and remain
-playable without external assets. The loadout panel supports optic, suppressor,
-and foregrip attachments; their meshes are rendered over either the built-in
-model or a loaded GLB. The optic adds a modest ADS zoom, the foregrip tightens
-spread, and the suppressor lowers the firing volume.
+```html
+<script>
+  window.BLACKSITE_WEAPON_ASSETS = {
+    rifle: {
+      url: "assets/weapons/my-rifle.gltf",
+      rotation: [0, 0, 0],
+      position: [0, -0.08, -0.12],
+      muzzle: [0, 0.025, -0.62],
+      sight: [0, 0.17, -0.04],
+      handPosition: [0, 0, 0],
+      handRotation: [0, 0, 0],
+      handScale: 1
+    },
+    knife: "assets/weapons/my-tactical-knife.glb"
+  };
+</script>
+```
 
-Player and bot characters are currently assembled from articulated procedural
-parts in `game.js`; no character rig files are required.
+Each weapon may be configured by its slot name (`rifle`, `sniper`, `shotgun`,
+`smg`, `knife`) or slot index (0-4). Supported options are `url`, `scale`,
+`position`, `rotation`, `muzzle`, `handPosition`, `handRotation`, and
+`handScale`. Set `scale` explicitly when automatic fit is not appropriate.
+For true iron-sight ADS alignment, name a node `IronSight`, `ADSSight`, or
+`AimPoint`, or set a local `sight` offset in the asset configuration.
+GLTF files may reference neighboring texture and buffer files.
+
+The game intentionally does not generate primitive weapon substitutes. If an
+asset has not been added yet, that slot has no visible model and the loader logs
+the requested path. Models without attachment nodes named `optic`/`scope`,
+`suppressor`/`silencer`, or `foregrip`/`vertical_grip` will not display the
+corresponding loadout attachment.

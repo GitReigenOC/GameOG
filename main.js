@@ -8,6 +8,7 @@ import { WeaponManager } from "./WeaponManager.js";
 import { BotAI } from "./BotAI.js";
 import { VFXSystem } from "./VFX.js";
 import { ReplayBuffer } from "./ReplayBuffer.js";
+import { WeaponAssetLoader } from "./WeaponAssetLoader.js";
 
 (() => {
       "use strict";
@@ -61,11 +62,11 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
       let weaponAnchor = null;
       let muzzleLight = null;
       let weaponModels = [];
-      let weaponAttachmentModels = [];
       let weaponMuzzles = [];
-      let weaponLoader = null;
+      let weaponSights = [];
       let networkPeer = null, networkConnection = null, networkRole = "";
       let networkStateTimer = 0, remotePlayer = null, roomCode = "";
+      let roomConfiguration = null;
       const raycaster = new THREE.Raycaster();
       const aimRaycaster = new THREE.Raycaster();
       const cameraRaycaster = new THREE.Raycaster();
@@ -138,18 +139,33 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
       const mapDefinitions = {
         arena: {
           name: "Tactical Arena", grid: originalArena, spawn: { x: 7.5, y: 7.5 },
+          enemySpawns: [
+            new THREE.Vector3(2.5, 0, -2.5), new THREE.Vector3(13.5, 0, -2.5),
+            new THREE.Vector3(2.5, 0, -13.5), new THREE.Vector3(13.5, 0, -13.5),
+            new THREE.Vector3(7.5, 0, -2.5), new THREE.Vector3(7.5, 0, -13.5)
+          ],
           outdoor: false, floor: "#30372f", floorLine: "#41483e", wall: "#555d50", wallLine: "#424a3f",
           ceiling: "#353c34", fog: "#202920", background: "#111a17", ambient: "#bac7aa", ambientPower: 1.15,
           sun: "#f0e5c4", sunPower: 2.2, floorRoughness: .8, wallRoughness: .88, lightColor: "#d3dbac"
         },
         battlefield: {
           name: "Battlefield", grid: createBattlefield(), spawn: { x: 18.5, y: 18.5 },
+          enemySpawns: [
+            new THREE.Vector3(4.5, 0, -4.5), new THREE.Vector3(31.5, 0, -4.5),
+            new THREE.Vector3(4.5, 0, -31.5), new THREE.Vector3(31.5, 0, -31.5),
+            new THREE.Vector3(7.5, 0, -18.5), new THREE.Vector3(28.5, 0, -18.5)
+          ],
           outdoor: true, floor: "#51483a", floorLine: "#675943", wall: "#716552", wallLine: "#443f36",
           ceiling: "#252a29", fog: "#756d60", background: "#526b78", ambient: "#91a7a5", ambientPower: .8,
           sun: "#ffd29a", sunPower: 2.7, floorRoughness: .96, wallRoughness: .93, lightColor: "#ffb979"
         },
         pool: {
           name: "The Pool Rooms", grid: createPoolRooms(), spawn: { x: 15.5, y: 15.5 },
+          enemySpawns: [
+            new THREE.Vector3(2.5, 0, -2.5), new THREE.Vector3(29.5, 0, -2.5),
+            new THREE.Vector3(2.5, 0, -29.5), new THREE.Vector3(29.5, 0, -29.5),
+            new THREE.Vector3(5.5, 0, -15.5), new THREE.Vector3(26.5, 0, -15.5)
+          ],
           outdoor: false, floor: "#397f80", floorLine: "#1d5d62", wall: "#abd8d0", wallLine: "#5daaa5",
           ceiling: "#397a79", fog: "#397c7f", background: "#16464e", ambient: "#9ce9e5", ambientPower: .82,
           sun: "#8df5f0", sunPower: .62, floorRoughness: .14, wallRoughness: .34, lightColor: "#56e9ef"
@@ -166,7 +182,9 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
         if (!staticMaterials.has(key)) {
           staticMaterials.set(key, new THREE.MeshStandardMaterial({
             color, roughness: options.roughness ?? .82, metalness: options.metalness ?? 0,
-            map: options.map || null, emissive: options.emissive || "#000000",
+            map: options.map || null, normalMap: options.normalMap || null,
+            normalScale: options.normalScale || new THREE.Vector2(.22, .22),
+            roughnessMap: options.roughnessMap || null, emissive: options.emissive || "#000000",
             emissiveIntensity: options.emissiveIntensity || 0,
             depthTest: true, depthWrite: true
           }));
@@ -194,12 +212,12 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
 
       function cachedArenaTexture(key, baseColor, lineColor, repeatX, repeatY) {
         if (!arenaTextures.has(key)) {
-          arenaTextures.set(key, createArenaTexture(baseColor, lineColor, repeatX, repeatY));
+          arenaTextures.set(key, createArenaTextures(baseColor, lineColor, repeatX, repeatY));
         }
         return arenaTextures.get(key);
       }
 
-      function createArenaTexture(baseColor, lineColor, repeatX, repeatY) {
+      function createArenaTextures(baseColor, lineColor, repeatX, repeatY) {
         const textureCanvas = document.createElement("canvas");
         textureCanvas.width = 256;
         textureCanvas.height = 256;
@@ -222,12 +240,59 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
           textureContext.fillStyle = i % 2 ? "#ffffff0b" : "#00000012";
           textureContext.fillRect(x, y, 2 + i % 5, 2);
         }
-        const texture = new THREE.CanvasTexture(textureCanvas);
-        texture.encoding = THREE.sRGBEncoding;
-        texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-        texture.repeat.set(repeatX, repeatY);
-        texture.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
-        return texture;
+        const normalCanvas = document.createElement("canvas");
+        normalCanvas.width = normalCanvas.height = 256;
+        const normalContext = normalCanvas.getContext("2d");
+        const normalImage = normalContext.createImageData(256, 256);
+        const heights = new Uint8Array(256 * 256);
+        for (let y = 0; y < 256; y++) {
+          for (let x = 0; x < 256; x++) {
+            const edge = x % 64 < 2 || y % 64 < 2;
+            heights[y * 256 + x] = edge ? 64 : 116 + ((x * 73 + y * 151 + x * y) % 32);
+          }
+        }
+        for (let y = 0; y < 256; y++) {
+          for (let x = 0; x < 256; x++) {
+            const index = (y * 256 + x) * 4;
+            const dx = heights[y * 256 + Math.min(255, x + 1)] - heights[y * 256 + Math.max(0, x - 1)];
+            const dy = heights[Math.min(255, y + 1) * 256 + x] - heights[Math.max(0, y - 1) * 256 + x];
+            const nx = -dx / 255, ny = -dy / 255, nz = 1;
+            const length = Math.hypot(nx, ny, nz);
+            normalImage.data[index] = Math.round((nx / length * .5 + .5) * 255);
+            normalImage.data[index + 1] = Math.round((ny / length * .5 + .5) * 255);
+            normalImage.data[index + 2] = Math.round((nz / length * .5 + .5) * 255);
+            normalImage.data[index + 3] = 255;
+          }
+        }
+        normalContext.putImageData(normalImage, 0, 0);
+
+        const roughnessCanvas = document.createElement("canvas");
+        roughnessCanvas.width = roughnessCanvas.height = 256;
+        const roughnessContext = roughnessCanvas.getContext("2d");
+        const roughnessImage = roughnessContext.createImageData(256, 256);
+        for (let y = 0; y < 256; y++) {
+          for (let x = 0; x < 256; x++) {
+            const index = (y * 256 + x) * 4;
+            const value = x % 64 < 2 || y % 64 < 2 ? 236 : 178 + ((x * 31 + y * 47 + x * y) % 56);
+            roughnessImage.data[index] = roughnessImage.data[index + 1] = roughnessImage.data[index + 2] = value;
+            roughnessImage.data[index + 3] = 255;
+          }
+        }
+        roughnessContext.putImageData(roughnessImage, 0, 0);
+
+        const makeTexture = (canvas, srgb = false) => {
+          const texture = new THREE.CanvasTexture(canvas);
+          if (srgb) texture.encoding = THREE.sRGBEncoding;
+          texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+          texture.repeat.set(repeatX, repeatY);
+          texture.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+          return texture;
+        };
+        return {
+          map: makeTexture(textureCanvas, true),
+          normalMap: makeTexture(normalCanvas),
+          roughnessMap: makeTexture(roughnessCanvas)
+        };
       }
 
       function buildArena(mapId) {
@@ -236,13 +301,17 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
         const width = map[0].length, depth = map.length;
         animatedMapProps = [];
         dynamicMapLights = [];
-        const floorTexture = cachedArenaTexture(`${mapId}-floor`, definition.floor, definition.floorLine, width, depth);
-        const wallTexture = cachedArenaTexture(`${mapId}-wall`, definition.wall, definition.wallLine, 2, 2);
+        const floorTextures = cachedArenaTexture(`${mapId}-floor`, definition.floor, definition.floorLine, width, depth);
+        const wallTextures = cachedArenaTexture(`${mapId}-wall`, definition.wall, definition.wallLine, 2, 2);
         const floorMaterial = cachedMaterial(`${mapId}-floor`, "#ffffff", {
-          map: floorTexture, roughness: definition.floorRoughness, metalness: mapId === "pool" ? .16 : 0
+          ...floorTextures, roughness: definition.floorRoughness,
+          metalness: mapId === "pool" ? .16 : 0,
+          normalScale: new THREE.Vector2(.28, .28)
         });
         const wallMaterial = cachedMaterial(`${mapId}-wall`, "#ffffff", {
-          map: wallTexture, roughness: definition.wallRoughness, metalness: mapId === "battlefield" ? .18 : 0
+          ...wallTextures, roughness: definition.wallRoughness,
+          metalness: mapId === "battlefield" ? .18 : 0,
+          normalScale: new THREE.Vector2(.2, .2)
         });
         const floor = new THREE.Mesh(cachedBoxGeometry(width, .08, depth), floorMaterial);
         floor.position.set(width / 2, -.06, -depth / 2);
@@ -366,6 +435,7 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
 
       function loadMap(mapId) {
         if (!mapDefinitions[mapId]) return;
+        vfxSystem.clearDecals();
         activeMapId = mapId;
         map = mapDefinitions[mapId].grid;
         if (mapGroup) scene.remove(mapGroup);
@@ -397,146 +467,21 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
       const weaponManager = new WeaponManager();
       const weapons = weaponManager.weapons;
       let loadoutWeaponIndex = 0;
-      const weaponModelSources = [
-        "assets/weapons/rifle.glb",
-        "assets/weapons/sniper.glb",
-        "assets/weapons/shotgun.glb",
-        "assets/weapons/smg.glb",
-        "assets/weapons/knife.glb"
-      ].map(path => new URL(path, document.baseURI).href);
-
-      function weaponBox(parent, size, position, material, name) {
-        const mesh = new THREE.Mesh(cachedBoxGeometry(...size), material);
-        mesh.position.set(...position);
-        mesh.name = name;
-        mesh.castShadow = true;
-        mesh.receiveShadow = true;
-        mesh.frustumCulled = true;
-        parent.add(mesh);
-        return mesh;
-      }
-
-      function weaponCylinder(parent, radius, length, position, material, name) {
-        const mesh = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, length, 12), material);
-        mesh.rotation.x = Math.PI / 2;
-        mesh.position.set(...position);
-        mesh.name = name;
-        mesh.castShadow = true;
-        mesh.receiveShadow = true;
-        parent.add(mesh);
-        return mesh;
-      }
-
-      function createFallbackWeapon(index) {
-        const group = new THREE.Group();
-        const darkMetal = cachedMaterial("weapon-metal", "#292f2c", { metalness: .78, roughness: .32 });
-        const edgeMetal = cachedMaterial("weapon-edge", "#7d8277", { metalness: .84, roughness: .24 });
-        const polymer = cachedMaterial("weapon-polymer", "#ffffff", {
-          roughness: .76,
-          map: cachedArenaTexture("weapon-composite", "#2c342e", "#47513d", 3, 3)
-        });
-        const gripMaterial = cachedMaterial("weapon-grip", "#191d19", { roughness: .94 });
-        const accent = cachedMaterial("weapon-accent", "#737969", { metalness: .58, roughness: .42 });
-        const barrelLength = index === 1 ? .57 : index === 2 ? .4 : index === 3 ? .28 : .36;
-
-        if (index === 4) {
-          const bladeShape = new THREE.Shape();
-          bladeShape.moveTo(-.035, .035);
-          bladeShape.quadraticCurveTo(-.105, .13, -.045, .22);
-          bladeShape.quadraticCurveTo(.015, .31, .12, .365);
-          bladeShape.quadraticCurveTo(.105, .285, .055, .205);
-          bladeShape.quadraticCurveTo(.005, .12, .045, .035);
-          bladeShape.closePath();
-          const bladeGeometry = new THREE.ExtrudeGeometry(bladeShape, {
-            depth: .025, bevelEnabled: true, bevelSegments: 2, steps: 1, bevelSize: .008, bevelThickness: .006
-          });
-          bladeGeometry.rotateX(-Math.PI / 2);
-          const blade = new THREE.Mesh(bladeGeometry, edgeMetal);
-          blade.name = "karambit-blade";
-          blade.position.y = -.01;
-          blade.castShadow = true;
-          group.add(blade);
-          weaponBox(group, [.075, .07, .19], [0, -.06, .13], gripMaterial, "karambit-grip");
-          weaponBox(group, [.13, .025, .035], [0, -.035, .025], accent, "karambit-guard");
-          const fingerRing = new THREE.Mesh(new THREE.TorusGeometry(.055, .012, 8, 18), edgeMetal);
-          fingerRing.position.set(0, -.055, .235);
-          fingerRing.castShadow = true;
-          group.add(fingerRing);
-          weaponBox(group, [.085, .018, .12], [0, -.02, .13], polymer, "karambit-scale");
-          return group;
-        }
-
-        weaponBox(group, [.22, .16, .3], [0, -.005, -.02], darkMetal, "receiver");
-        weaponBox(group, [.19, .08, .27], [0, .085, -.015], accent, "upper-receiver");
-        weaponBox(group, [.18, .16, index === 1 ? .28 : .2], [0, -.005, .2], polymer, "stock");
-        weaponBox(group, [.1, .2, .11], [0, -.15, .02], gripMaterial, "pistol-grip");
-        weaponBox(group, [.07, .19, .16], [0, -.17, -.08], gripMaterial, "magazine");
-        weaponCylinder(group, .027, barrelLength, [0, .025, -.2 - barrelLength / 2], edgeMetal, "barrel");
-        weaponCylinder(group, .046, .075, [0, .025, -.25 - barrelLength], darkMetal, "muzzle-brake");
-        weaponBox(group, [.28, .035, .045], [0, .12, -.04], gripMaterial, "top-rail");
-        for (let notch = 0; notch < 5; notch++) {
-          weaponBox(group, [.026, .012, .012], [-.105 + notch * .052, .145, -.04], edgeMetal, `rail-notch-${notch}`);
-        }
-        weaponBox(group, [.1, .045, .04], [0, .17, -.035], accent, "iron-sight");
-
-        if (index === 1) {
-          const scope = new THREE.Mesh(new THREE.CylinderGeometry(.065, .065, .26, 16), darkMetal);
-          scope.rotation.x = Math.PI / 2;
-          scope.position.set(0, .22, -.04);
-          scope.castShadow = true;
-          scope.frustumCulled = true;
-          group.add(scope);
-          weaponBox(group, [.17, .08, .19], [0, -.12, .05], gripMaterial, "sniper-magazine");
-        } else if (index === 2) {
-          weaponBox(group, [.07, .07, .43], [.085, -.035, -.41], accent, "shotgun-tube");
-          weaponBox(group, [.045, .07, .17], [0, -.12, -.19], polymer, "pump-grip");
-        } else if (index === 3) {
-          weaponBox(group, [.16, .1, .15], [0, .13, -.03], accent, "smg-sight");
-          weaponBox(group, [.055, .23, .1], [0, -.19, -.04], gripMaterial, "extended-magazine");
-        } else {
-          weaponBox(group, [.08, .07, .23], [-.13, -.025, -.13], polymer, "foregrip");
-        }
-        return group;
-      }
-
-      function createWeaponAttachments() {
-        const group = new THREE.Group();
-        const metal = cachedMaterial("attachment-metal", "#343b35", { metalness: .8, roughness: .3 });
-        const glass = cachedMaterial("attachment-glass", "#233b3a", { metalness: .25, roughness: .2, emissive: "#274544", emissiveIntensity: .25 });
-        const optic = new THREE.Group();
-        const opticTube = new THREE.Mesh(new THREE.CylinderGeometry(.045, .045, .19, 12), metal);
-        opticTube.rotation.x = Math.PI / 2;
-        opticTube.position.set(0, .205, -.035);
-        const opticGlass = new THREE.Mesh(new THREE.CylinderGeometry(.032, .032, .012, 12), glass);
-        opticGlass.rotation.x = Math.PI / 2;
-        opticGlass.position.set(0, .205, -.137);
-        optic.add(opticTube, opticGlass);
-        const suppressor = new THREE.Group();
-        const suppressorBody = new THREE.Mesh(new THREE.CylinderGeometry(.045, .045, .24, 12), metal);
-        suppressorBody.rotation.x = Math.PI / 2;
-        suppressorBody.position.set(0, .025, -.72);
-        suppressor.add(suppressorBody);
-        const foregrip = new THREE.Group();
-        const gripMesh = new THREE.Mesh(cachedBoxGeometry(.075, .13, .085), metal);
-        gripMesh.position.set(.085, -.13, -.15);
-        foregrip.add(gripMesh);
-        group.add(optic, suppressor, foregrip);
-        group.userData.slots = { optic, suppressor, foregrip };
-        group.traverse(object => {
-          if (object.isMesh) {
-            object.castShadow = true;
-            object.frustumCulled = true;
-          }
-        });
-        return group;
-      }
+      const weaponAssetLoader = new WeaponAssetLoader(THREE, GLTFLoader);
 
       function applyWeaponAttachments(index) {
-        const slots = weaponAttachmentModels[index]?.userData.slots;
-        if (!slots) return;
-        for (const [name, object] of Object.entries(slots)) {
-          object.visible = Boolean(weapons[index].attachments[name]);
-        }
+        const model = weaponModels[index];
+        if (!model) return;
+        const attachmentNames = {
+          optic: /optic|scope|sight/i,
+          suppressor: /suppressor|silencer/i,
+          foregrip: /foregrip|vertical[_ -]?grip/i
+        };
+        model.traverse(object => {
+          for (const [name, pattern] of Object.entries(attachmentNames)) {
+            if (pattern.test(object.name)) object.visible = Boolean(weapons[index].attachments[name]);
+          }
+        });
       }
 
       function updateLoadoutControls() {
@@ -553,55 +498,20 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
         muzzleLight.position.set(.32, -.25, -1.25);
         camera.add(muzzleLight);
         weaponModels = weapons.map((weapon, index) => {
-          const fallback = createFallbackWeapon(index);
-          fallback.visible = index === player.weaponIndex;
-          weaponAnchor.add(fallback);
-          const barrelLengths = [.36, .57, .4, .28, 0];
-          const muzzle = new THREE.Group();
-          muzzle.name = "procedural-muzzle-socket";
-          muzzle.position.set(0, .025, index === 4 ? -.15 : -.25 - barrelLengths[index] - .04);
-          fallback.add(muzzle);
-          weaponMuzzles[index] = muzzle;
-          return { fallback, loaded: null };
+          const holder = new THREE.Group();
+          holder.name = `${weapon.short.toLowerCase()}-weapon-holder`;
+          holder.visible = index === player.weaponIndex;
+          weaponAnchor.add(holder);
+          return holder;
         });
-        weaponAttachmentModels = weapons.map((weapon, index) => {
-          const attachments = createWeaponAttachments();
-          attachments.visible = index === player.weaponIndex;
-          weaponAnchor.add(attachments);
-          return attachments;
-        });
-        weaponAttachmentModels.forEach((attachments, index) => applyWeaponAttachments(index));
-        weaponLoader = new GLTFLoader();
-        weaponModelSources.forEach((source, index) => {
-          if (!source) return;
-          weaponLoader.load(source, gltf => {
-            const model = gltf.scene;
-            model.scale.setScalar(index === 4 ? .42 : .5);
-            model.position.set(0, -.08, -.12);
-            model.traverse(object => {
-              if (!object.isMesh) return;
-              ensureGeometryBounds(object.geometry);
-              object.castShadow = true;
-              object.receiveShadow = true;
-              object.frustumCulled = true;
-            });
-            model.visible = index === player.weaponIndex;
-            weaponAnchor.add(model);
-            let muzzle = null;
-            model.traverse(object => {
-              if (!muzzle && /muzzle|barrel[_ -]?(end|tip)/i.test(object.name)) muzzle = object;
-            });
-            if (!muzzle) {
-              muzzle = new THREE.Group();
-              muzzle.name = "generated-muzzle-socket";
-              muzzle.position.set(0, .025, index === 1 ? -.78 : -.62);
-              model.add(muzzle);
-            }
-            weaponMuzzles[index] = muzzle;
-            weaponModels[index].loaded = model;
-            weaponModels[index].fallback.visible = false;
-          }, undefined, error => {
-            if (error?.target?.status !== 404) console.warn(`Could not load weapon model ${source}; using the built-in 3D model.`, error);
+        weaponAssetLoader.loadAll().then(() => {
+          weaponModels.forEach((holder, index) => {
+            const model = weaponAssetLoader.createInstance(index);
+            if (!model) return;
+            holder.add(model);
+            weaponMuzzles[index] = weaponAssetLoader.getMuzzle(model, index);
+            weaponSights[index] = weaponAssetLoader.getSight(model, index);
+            applyWeaponAttachments(index);
           });
         });
       }
@@ -615,7 +525,8 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
       let resultSubmitted = false;
       const replayGhosts = new Map();
       let running = false, gameOver = false, pointerLockUnavailable = false, wave = 0, lastTime = 0;
-      let fireCooldown = 0, reloadTimer = 0, hurtFlash = 0, muzzleFlash = 0, hitTimeout = 0;
+      let fireCooldown = 0, reloadTimer = 0, hurtFlash = 0, muzzleFlash = 0;
+      let hitMarkerTimeout = 0, hitConfirmationTimeout = 0;
       let reloadDuration = 0;
       let firing = false, aiming = false, toastTimeout = 0, knifeSwing = 0, movementBob = 0;
       let weaponRecoil = 0, recoilPitch = 0, recoilYaw = 0, weaponLagX = 0, dashTimer = 0, dashCooldown = 0;
@@ -626,7 +537,7 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
       let grenadeCooldown = 0, flashbangCooldown = 0, grenadeAnimation = 0, flashbangAnimation = 0;
       let grenades = 2, flashbangs = 1;
       let grenadeFlash = 0, damageMessageTimer = 0, footstepsTimer = 0;
-      const controlSettings = { mouseSensitivity: 1, scopeSensitivity: .44, fieldOfView: 82, masterVolume: .7 };
+      const controlSettings = { mouseSensitivity: 1, scopeSensitivity: .25, fieldOfView: 82, masterVolume: .7 };
       let settingsReturnToPause = false;
       let reloadKind = "";
       let lastEscapePress = 0;
@@ -648,7 +559,7 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
           controlSettings.mouseSensitivity = Math.min(3, Math.max(.2, savedSettings.mouseSensitivity));
         }
         if (Number.isFinite(savedSettings.scopeSensitivity)) {
-          controlSettings.scopeSensitivity = Math.min(1, Math.max(.2, savedSettings.scopeSensitivity));
+          controlSettings.scopeSensitivity = Math.min(1, Math.max(.1, savedSettings.scopeSensitivity));
         }
         if (Number.isFinite(savedSettings.fieldOfView)) {
           controlSettings.fieldOfView = Math.min(110, Math.max(65, savedSettings.fieldOfView));
@@ -762,9 +673,19 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
         const confirmation = document.querySelector("#hit-confirmation");
         confirmation.classList.toggle("no-scope", noScope);
         confirmation.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5a8.6 8.6 0 0 0-5.2 15.45V22l5.2-2.2 5.2 2.2v-4.05A8.6 8.6 0 0 0 12 2.5Zm-2.6 7.1a1.2 1.2 0 1 1 0 2.4 1.2 1.2 0 0 1 0-2.4Zm5.2 0a1.2 1.2 0 1 1 0 2.4 1.2 1.2 0 0 1 0-2.4ZM9 15h6l-3 2.2L9 15Z"/></svg>${label}`;
+        confirmation.classList.remove("visible");
+        void confirmation.offsetWidth;
         confirmation.classList.add("visible");
-        clearTimeout(hitTimeout);
-        hitTimeout = setTimeout(() => confirmation.classList.remove("visible"), 850);
+        clearTimeout(hitConfirmationTimeout);
+        hitConfirmationTimeout = setTimeout(() => confirmation.classList.remove("visible"), 1000);
+      }
+
+      function showHitMarker() {
+        hitMarker.classList.remove("visible");
+        void hitMarker.offsetWidth;
+        hitMarker.classList.add("visible");
+        clearTimeout(hitMarkerTimeout);
+        hitMarkerTimeout = setTimeout(() => hitMarker.classList.remove("visible"), 1000);
       }
 
       function awardKillstreak() {
@@ -779,10 +700,7 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
             const position = new THREE.Vector3(enemy.x, .2, -enemy.y);
             vfxSystem.spawnExplosion(position, "#d4a65e");
             enemy.health -= 70;
-            if (enemy.health <= 0) {
-              enemies.splice(enemies.indexOf(enemy), 1);
-              player.score += 100;
-            }
+            if (enemy.health <= 0) eliminateEnemy(enemy);
           });
           setCombatMessage("AIRSTRIKE INBOUND", 1800);
         }
@@ -879,6 +797,49 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
         disconnectButton.disabled = !networkPeer && !networkConnection;
         document.querySelector("#servers-kicker").textContent = "PEER-TO-PEER / PRIVATE ROOM";
         document.querySelector("#servers-title").textContent = "PRIVATE LOBBY";
+        updateRoomConfigurationControls();
+      }
+
+      function canConfigureCurrentRoom() {
+        return networkRole === "host" && Boolean(networkPeer?.open) &&
+          Boolean(roomConfiguration) && !networkConnection?.open;
+      }
+
+      function updateRoomConfigurationControls() {
+        const configureButton = document.querySelector("#configure-room-button");
+        const panel = document.querySelector("#room-config-panel");
+        const canConfigure = canConfigureCurrentRoom();
+        configureButton.disabled = !canConfigure;
+        if (!canConfigure) panel.hidden = true;
+      }
+
+      function toggleRoomConfiguration() {
+        if (!canConfigureCurrentRoom()) {
+          setRoomMessage("Create an active room before changing its settings.", true);
+          return;
+        }
+        const panel = document.querySelector("#room-config-panel");
+        panel.hidden = !panel.hidden;
+        if (!panel.hidden) {
+          document.querySelector("#room-mode-setting").value = roomConfiguration.mode;
+          document.querySelector("#room-map-setting").value = roomConfiguration.mapId;
+        }
+      }
+
+      function applyRoomConfiguration() {
+        if (!canConfigureCurrentRoom()) {
+          setRoomMessage("Room settings can only be applied to an active host room.", true);
+          return;
+        }
+        const mode = document.querySelector("#room-mode-setting").value;
+        const mapId = document.querySelector("#room-map-setting").value;
+        if (!["ffa-waves", "duel", "ffa", "tdm"].includes(mode) || !mapDefinitions[mapId]) {
+          setRoomMessage("Choose a supported match mode and map.", true);
+          return;
+        }
+        roomConfiguration = { mode, mapId };
+        document.querySelector("#room-config-panel").hidden = true;
+        setRoomMessage(`Room settings saved: ${mode.toUpperCase()} on ${mapDefinitions[mapId].name}.`);
       }
 
       function sendPeerMessage(message) {
@@ -939,6 +900,16 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
 
       function handlePeerData(data) {
         if (!data || typeof data !== "object") return;
+        if (data.type === "room-config" && networkRole !== "host" &&
+          ["ffa-waves", "duel", "ffa", "tdm"].includes(data.mode) &&
+          typeof data.mapId === "string" && mapDefinitions[data.mapId]) {
+          selectedMode = data.mode;
+          selectedMapId = data.mapId;
+          gameMode = data.mode === "ffa-waves" ? "coop" : data.mode;
+          if (activeMapId !== data.mapId) loadMap(data.mapId);
+          if (running) startGame(gameMode, true);
+          return;
+        }
         if (data.type === "ack" && networkRole !== "host" &&
           Number.isInteger(data.sequence) && data.position &&
           Number.isFinite(data.position.x) && Number.isFinite(data.position.z)) {
@@ -1021,9 +992,16 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
         connection.on("open", () => {
           document.querySelector("#join-room-button").disabled = false;
           document.querySelector("#room-code-input").value = roomCode;
-          updateRoomPanel(`Connected to ${connection.peer}. Starting ${selectedMode.toUpperCase()}...`);
-          gameMode = selectedMode === "ffa-waves" ? "coop" : selectedMode;
+          const roomMode = networkRole === "host" && roomConfiguration ? roomConfiguration.mode : selectedMode;
+          const roomMap = networkRole === "host" && roomConfiguration ? roomConfiguration.mapId : selectedMapId;
+          updateRoomPanel(`Connected to ${connection.peer}. Starting ${roomMode.toUpperCase()}...`);
+          selectedMapId = roomMap;
+          gameMode = roomMode === "ffa-waves" ? "coop" : roomMode;
           startGame(gameMode, true);
+          if (networkRole === "host" && roomConfiguration) {
+            sendPeerMessage({ type: "room-config", mode: roomConfiguration.mode, mapId: roomConfiguration.mapId });
+          }
+          updateRoomConfigurationControls();
           sendPlayerState();
           if (networkStateTimer) clearInterval(networkStateTimer);
           networkStateTimer = window.setInterval(sendPlayerState, 50);
@@ -1036,6 +1014,8 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
           networkStateTimer = 0;
           removeRemoteModel();
           setRoomMessage("The peer connection closed.");
+          updateRoomPanel("The peer connection closed.");
+          updateRoomConfigurationControls();
           if (running) pauseGame();
         });
         connection.on("error", error => {
@@ -1049,14 +1029,21 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
           setRoomMessage("PeerJS failed to load. Check your internet connection and reload.", true);
           return;
         }
+        if (networkConnection) {
+          networkConnection.close();
+          networkConnection = null;
+        }
         if (networkPeer) networkPeer.destroy();
+        roomConfiguration = null;
         networkRole = "host";
         roomCode = makeRoomCode();
+        updateRoomConfigurationControls();
         document.querySelector("#room-code-input").value = roomCode;
         setRoomMessage("Connecting to the PeerJS signaling service...");
         networkPeer = new Peer(roomCode, { debug: 1 });
         networkPeer.on("open", id => {
           roomCode = id;
+          if (!roomConfiguration) roomConfiguration = { mode: selectedMode, mapId: selectedMapId };
           document.querySelector("#room-code-input").value = id;
           setRoomMessage(`Room is ready. Share this invite code: ${id}`);
           updateRoomPanel(`Waiting for one player to connect to ${id}.`);
@@ -1064,10 +1051,13 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
         networkPeer.on("connection", connection => attachPeerConnection(connection));
         networkPeer.on("error", error => {
           console.error("Peer room error.", error);
+          roomConfiguration = null;
+          updateRoomConfigurationControls();
           setRoomMessage(`Could not create the room (${error.type || "network error"}). Try again.`, true);
         });
         networkPeer.on("disconnected", () => {
           setRoomMessage("PeerJS signaling disconnected. Reconnect or create a new room.", true);
+          updateRoomConfigurationControls();
           networkPeer?.reconnect();
         });
       }
@@ -1082,9 +1072,15 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
           setRoomMessage("Enter a valid 8-character room code starting with bs-.", true);
           return;
         }
+        if (networkConnection) {
+          networkConnection.close();
+          networkConnection = null;
+        }
         if (networkPeer) networkPeer.destroy();
+        roomConfiguration = null;
         roomCode = code;
         networkRole = "guest";
+        updateRoomConfigurationControls();
         setRoomMessage(`Connecting to ${code}...`);
         networkPeer = new Peer(undefined, { debug: 1 });
         networkPeer.on("open", () => {
@@ -1115,6 +1111,7 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
         networkStateTimer = 0;
         networkRole = "";
         roomCode = "";
+        roomConfiguration = null;
         removeRemoteModel();
         if (running) pauseGame();
         updateRoomPanel();
@@ -1171,16 +1168,13 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
             grenadeFlash = .2;
             explosions.push({ x: impactX, y: impactY, age: 0, duration: 1.1 });
             addBlastEffect(new THREE.Vector3(impactX, .45, -impactY));
-            addImpactParticles(new THREE.Vector3(impactX, .45, -impactY), "#ffad53");
-            enemies = enemies.filter(enemy => {
-              if (gameMode === "tdm" && enemy.team !== 1) return true;
+            for (const enemy of [...enemies]) {
+              if (gameMode === "tdm" && enemy.team !== 1) continue;
               const distanceToBlast = Math.hypot(enemy.x - impactX, enemy.y - impactY);
-              if (distanceToBlast > 3.8) return true;
+              if (distanceToBlast > 3.8) continue;
               enemy.health -= 160 * (1 - distanceToBlast / 4.5);
-              if (enemy.health <= 0) player.score += 100;
-              return enemy.health > 0;
-            });
-            document.querySelector("#score").textContent = String(player.score).padStart(4, "0");
+              if (enemy.health <= 0) eliminateEnemy(enemy, { weaponIndex: player.weaponIndex });
+            }
             setCombatMessage("FRAG DETONATED");
             if (gameMode === "tdm" ? !enemies.some(enemy => enemy.team === 1) :
               !isWaveMode() && enemies.length === 0) endGame();
@@ -1210,6 +1204,21 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
 
       function currentWeapon() {
         return weaponManager.current(player.weaponIndex);
+      }
+
+      function lookSensitivityMultiplier() {
+        return aiming ? currentWeapon().scoped ? controlSettings.scopeSensitivity : .66 : 1;
+      }
+
+      function alignWeaponSight() {
+        const sight = weaponSights[player.weaponIndex];
+        if (!sight) return;
+        camera.updateMatrixWorld(true);
+        weaponAnchor.updateWorldMatrix(true, true);
+        const sightInCamera = camera.worldToLocal(sight.getWorldPosition(new THREE.Vector3()));
+        weaponAnchor.position.x -= sightInCamera.x;
+        weaponAnchor.position.y -= sightInCamera.y;
+        weaponAnchor.updateWorldMatrix(true, true);
       }
 
       function getMuzzleWorldPosition() {
@@ -1242,8 +1251,8 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
           slot.classList.toggle("active", index === player.weaponIndex);
           slot.setAttribute("aria-pressed", String(index === player.weaponIndex));
         });
-        weaponAttachmentModels.forEach((attachments, index) => {
-          attachments.visible = index === player.weaponIndex;
+        weaponModels.forEach((model, index) => {
+          model.visible = index === player.weaponIndex && !(aiming && weapon.scoped);
         });
       }
 
@@ -1336,7 +1345,8 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
           if (riggedModel) return riggedModel;
         }
         const group = new THREE.Group();
-        const teamColor = gameMode === "tdm" && enemy.team === 0 ? "#52747a" : "#59634d";
+        const teamColor = enemy.type === "brute" ? "#46483f" :
+          gameMode === "tdm" && enemy.team === 0 ? "#52747a" : "#59634d";
         const uniform = cachedMaterial(`enemy-uniform-${teamColor}`, teamColor, { roughness: .88 });
         const armor = cachedMaterial("enemy-armor", "#272e29", { metalness: .16, roughness: .74 });
         const visor = cachedMaterial("enemy-visor", "#c1e16d", { emissive: "#677d36", emissiveIntensity: .35 });
@@ -1429,6 +1439,7 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
           hitbox.position.set(...position);
           hitbox.userData.enemyRef = enemy;
           hitbox.userData.hitZone = hitZone;
+          hitbox.userData.isHitbox = true;
           hitboxes.add(hitbox);
         };
         addHitbox(new THREE.SphereGeometry(.22, 10, 8), [0, 1.65, 0], "head");
@@ -1457,6 +1468,7 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
               : /torso|vest|pouch/i.test(object.name) ? "chest" : "limb";
           }
         });
+        group.scale.setScalar(enemy.type === "brute" ? 1.28 : 1);
         scene.add(group);
         enemyModels.set(enemy, group);
         return group;
@@ -1469,15 +1481,16 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
           if (object.isBone) bones.push(object);
         });
         const findBone = pattern => bones.find(bone => pattern.test(bone.name));
-        const handSocket = findBone(/weapon[_ -]?r|right[_ -]?hand|hand[_ -]?r|mixamorigrightHand/i);
+        const handSocket = findBone(/^Hand_R$/i) ||
+          findBone(/^(?:hand_r|mixamorigrightHand|right[_ -]?hand)$/i);
         if (!handSocket) {
           if (!warnedMissingHandSocket) {
             warnedMissingHandSocket = true;
-            console.warn("The optional enemy rig has no named right-hand socket; using the procedural bot.");
+            console.warn("The optional enemy rig has no Hand_R/right-hand bone; using the procedural bot.");
           }
           return null;
         }
-        model.scale.setScalar(.9);
+        model.scale.setScalar(enemy.type === "brute" ? 1.15 : .9);
         const teamMaterial = cachedMaterial("rigged-enemy-uniform", "#59634d", { roughness: .88 });
         model.traverse(object => {
           if (!object.isMesh) return;
@@ -1499,6 +1512,7 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
           const hitbox = new THREE.Mesh(ensureGeometryBounds(new THREE.SphereGeometry(radius, 10, 8)), hitboxMaterial);
           hitbox.userData.enemyRef = enemy;
           hitbox.userData.hitZone = zone;
+          hitbox.userData.isHitbox = true;
           bone.add(hitbox);
         };
         addBoneHitbox(findBone(/head/i), "head", .2);
@@ -1506,31 +1520,31 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
         addBoneHitbox(findBone(/leftarm|rightarm|arm_[lr]/i), "limb", .13);
         addBoneHitbox(findBone(/leftupleg|rightupleg|thigh_[lr]/i), "limb", .14);
 
-        const weaponSocket = new THREE.Group();
-        weaponSocket.name = "right-hand-weapon-socket";
-        const weaponMaterial = cachedMaterial("rigged-bot-weapon", "#252b25", { metalness: .62, roughness: .38 });
-        const weaponChoices = [];
-        for (const [index, length] of [.45, .62, .5, .34].entries()) {
-          const weaponChoice = new THREE.Group();
-          const weapon = new THREE.Mesh(cachedBoxGeometry(.075, .085, length), weaponMaterial);
-          weapon.position.z = -length * .45;
-          weapon.castShadow = true;
-          weaponChoice.add(weapon);
-          weaponChoice.visible = index === enemy.weaponIndex;
-          weaponChoices.push(weaponChoice);
-          weaponSocket.add(weaponChoice);
-        }
-        handSocket.add(weaponSocket);
         const animationMixer = new THREE.AnimationMixer(model);
         const movementClip = enemyRigAnimations.find(clip => /run|walk|move/i.test(clip.name)) || enemyRigAnimations[0];
         if (movementClip) animationMixer.clipAction(movementClip).play();
         model.userData.rigged = true;
         model.userData.mixer = animationMixer;
-        model.userData.weaponSocket = weaponSocket;
-        model.userData.weaponChoices = weaponChoices;
+        model.userData.weaponHand = handSocket;
+        model.userData.weaponIndex = -1;
         scene.add(model);
         enemyModels.set(enemy, model);
         return model;
+      }
+
+      function updateRiggedWeapon(model, enemy) {
+        if (model.userData.weaponIndex === enemy.weaponIndex) return;
+        model.userData.weaponModel?.parent?.remove(model.userData.weaponModel);
+        const weapon = weaponAssetLoader.createInstance(enemy.weaponIndex);
+        model.userData.weaponModel = weapon;
+        model.userData.weaponIndex = weapon ? enemy.weaponIndex : -1;
+        if (!weapon) return;
+        const handTransform = weaponAssetLoader.getHandOffset(enemy.weaponIndex);
+        weapon.position.set(...handTransform.position);
+        weapon.rotation.set(...handTransform.rotation);
+        weapon.scale.multiplyScalar(handTransform.scale);
+        weapon.userData.isWeapon = true;
+        model.userData.weaponHand.add(weapon);
       }
 
       function loadEnemyRig() {
@@ -1572,9 +1586,7 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
           model.rotation.y = faceAngle - Math.PI / 2;
           if (model.userData.rigged) {
             model.userData.mixer.update(dt);
-            model.userData.weaponChoices.forEach((weapon, index) => {
-              weapon.visible = index === Math.min(3, enemy.weaponIndex);
-            });
+            updateRiggedWeapon(model, enemy);
             model.visible = enemy.health > 0;
             continue;
           }
@@ -1667,25 +1679,67 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
         model.userData.muzzleLight.intensity = remotePlayer.firing ? .75 : 0;
       }
 
+      function getEnemySpawnPosition() {
+        const definition = mapDefinitions[activeMapId];
+        const isSafe = position => canOccupyOnMap(map, position.x, position.y, .24);
+        const authoredSpawns = (definition.enemySpawns || [])
+          .map(point => ({ x: point.x, y: -point.z }))
+          .filter(isSafe);
+        const openTiles = [];
+        for (let row = 1; row < map.length - 1; row++) {
+          for (let column = 1; column < map[row].length - 1; column++) {
+            const position = { x: column + .5, y: row + .5 };
+            if (isSafe(position)) openTiles.push(position);
+          }
+        }
+        const safeFromPlayer = positions => positions.filter(position =>
+          Math.hypot(position.x - player.x, position.y - player.y) >= 4
+        );
+        const preferred = safeFromPlayer(authoredSpawns);
+        const fallback = safeFromPlayer(openTiles);
+        const candidates = preferred.length ? preferred : fallback.length ? fallback : authoredSpawns.length ? authoredSpawns : openTiles;
+        if (!candidates.length) throw new Error(`Map "${activeMapId}" has no valid enemy spawn tiles.`);
+        return candidates[Math.floor(Math.random() * candidates.length)];
+      }
+
+      function eliminateEnemy(enemy, { weaponIndex = player.weaponIndex, headshot = false, noScope = false } = {}) {
+        const enemyIndex = enemies.indexOf(enemy);
+        if (enemyIndex < 0) return false;
+        const model = enemyModels.get(enemy);
+        if (model) model.visible = false;
+        vfxSystem.spawnBlood(new THREE.Vector3(enemy.x, .95, -enemy.y));
+        enemies.splice(enemyIndex, 1);
+        player.score += 100;
+        awardKillstreak();
+        replayBuffer.recordEvent(performance.now(), {
+          type: "kill", weapon: weaponIndex, headshot, noScope, x: enemy.x, y: enemy.y
+        });
+        document.querySelector("#score").textContent = String(player.score).padStart(4, "0");
+        return true;
+      }
+
       function spawnWave() {
         wave++;
         const count = isWaveMode() ? Math.min(3 + wave * 2, 15) :
           gameMode === "duel" ? 1 : gameMode === "tdm" ? 4 : 5;
+        const bruteIndex = gameMode === "duel" || (isWaveMode() ? wave < 2 : Math.random() >= .2)
+          ? -1
+          : count - 1;
         for (let i = 0; i < count; i++) {
-          let x, y, tries = 0;
-          do {
-            x = 1.5 + Math.random() * (map[0].length - 3);
-            y = 1.5 + Math.random() * (map.length - 3);
-            tries++;
-          } while ((wallAt(x, y) || Math.hypot(x - player.x, y - player.y) < 4) && tries < 100);
+          const spawn = getEnemySpawnPosition();
+          const isBrute = i === bruteIndex;
+          const weaponIndex = isBrute
+            ? [1, 2][Math.floor(Math.random() * 2)]
+            : [0, 0, 1, 2, 3][Math.floor(Math.random() * 5)];
           enemies.push({
             id: `enemy-${nextEnemyId++}`,
-            x, y, health: 100, attack: Math.random() * 1.5,
+            x: spawn.x, y: spawn.y, type: isBrute ? "brute" : "soldier",
+            health: isBrute ? 300 : 100, maxHealth: isBrute ? 300 : 100,
+            movementMultiplier: isBrute ? .68 : 1, attack: Math.random() * 1.5,
             strafe: Math.random() < .5 ? 1 : -1, phase: Math.random() * Math.PI * 2,
             footstepTimer: Math.random() * .25, sprinting: false,
             team: gameMode === "tdm" ? (i < 2 ? 0 : 1) : 1,
-            weaponIndex: [0, 0, 1, 2, 3][Math.floor(Math.random() * 5)],
-            state: "advance", stateTimer: 1 + Math.random() * 2, cover: null
+            weaponIndex, state: "seek", stateTimer: 1 + Math.random() * 2, cover: null
           });
         }
         document.querySelector("#wave").textContent = isWaveMode()
@@ -1868,7 +1922,7 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
         if (grenadeAim) updateGrenadeArc();
         else if (grenadeArc) grenadeArc.visible = false;
         camera.fov = aiming
-          ? currentWeapon().scoped ? 36 : currentWeapon().attachments.optic ? Math.max(55, controlSettings.fieldOfView - 20) : controlSettings.fieldOfView
+          ? currentWeapon().scoped ? 22 : Math.max(60, controlSettings.fieldOfView - (currentWeapon().attachments.optic ? 24 : 12))
           : controlSettings.fieldOfView;
         camera.updateProjectionMatrix();
         const aimWallDistance = castRay(player.angle).distance;
@@ -1895,10 +1949,10 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
           weaponAnchor.rotation.x = (dashTimer > 0 ? -.16 : 0) + weaponRecoil * .004 - meleeArc * .72;
           weaponAnchor.rotation.y = meleeArc * .62;
           weaponAnchor.rotation.z = dashTimer > 0 ? -.08 : currentWeapon().melee ? -knifeSwing * .32 : 0;
+          if (aiming && !currentWeapon().scoped) alignWeaponSight();
           muzzleLight.intensity = muzzleFlash > 0 ? 3.5 : 0;
-          weaponModels.forEach(({ fallback, loaded }, index) => {
-            fallback.visible = index === player.weaponIndex && !loaded;
-            if (loaded) loaded.visible = index === player.weaponIndex;
+          weaponModels.forEach((model, index) => {
+            model.visible = index === player.weaponIndex && !(aiming && currentWeapon().scoped);
           });
         }
         renderer.render(scene, camera);
@@ -1920,31 +1974,41 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
         if (!weapon.melee && weapon.ammo <= 0) { reload(); return; }
         ensureAudio();
         const muzzlePosition = getMuzzleWorldPosition();
+        const recoilScale = (aiming ? .3 : 1) * (weapon.attachments.suppressor ? .7 : 1);
         if (!weapon.melee) {
           weapon.ammo--;
           muzzleFlash = weapon.scoped ? .18 : .1;
           updateWeaponHud();
-          playSound(player.weaponIndex === 0 ? "rifle" : player.weaponIndex === 1 ? "sniper" : player.weaponIndex === 2 ? "shotgun" : "smg",
-            muzzlePosition, { volume: weapon.attachments.suppressor ? .45 : 1 });
+          const soundType = player.weaponIndex === 0 ? "rifle"
+            : player.weaponIndex === 1 ? "sniper"
+              : player.weaponIndex === 2 ? "shotgun" : "smg";
+          const suppressed = weapon.attachments.suppressor;
+          playSound(suppressed ? "suppressed" : soundType, muzzlePosition, {
+            volume: suppressed ? .48 : 1,
+            refDistance: suppressed ? 1.25 : 3.2,
+            rolloffFactor: suppressed ? 2.2 : 1.35
+          });
           vfxSystem.spawnMuzzleFlash(muzzlePosition);
-          weaponRecoil = Math.max(weaponRecoil, weapon.recoil || 7);
+          weaponRecoil = Math.max(weaponRecoil, (weapon.recoil || 7) * recoilScale);
         } else {
           knifeSwing = 1;
           playSound("knife");
         }
         fireCooldown = weapon.interval;
-        const recoilScale = aiming ? .3 : 1;
-        recoilPitch = (weapon.recoil || 7) * .00055 * recoilScale;
-        recoilYaw = (Math.random() - .5) * (weapon.recoil || 7) * .0003 * recoilScale;
-        playerPitch = Math.max(-1.35, Math.min(1.35, playerPitch + recoilPitch));
-        player.angle += recoilYaw;
+        const recoilStrength = weapon.recoil || 7;
+        const pitchKick = recoilStrength * Math.PI / 180 * .075 * recoilScale;
+        const yawKick = (Math.random() - .5) * recoilStrength * Math.PI / 180 * .09 * recoilScale;
+        recoilPitch = Math.min(.18, recoilPitch + pitchKick);
+        recoilYaw = Math.max(-.12, Math.min(.12, recoilYaw + yawKick));
+        playerPitch = Math.max(-1.35, Math.min(1.35, playerPitch + pitchKick));
+        player.angle += yawKick;
         if (weapon.chamberTime) {
           reloadTimer = weapon.chamberTime;
           reloadDuration = weapon.chamberTime;
           reloadKind = "chamber";
         }
         sendPeerMessage({ type: "shot", weapon: player.weaponIndex, angle: player.angle, pitch: playerPitch });
-        const pelletCount = weapon.melee ? 7 : weapon.pellets || 1;
+        const pelletCount = weapon.melee ? 1 : weapon.pellets || 1;
         const hits = new Map();
         for (let pellet = 0; pellet < pelletCount; pellet++) {
           const spread = weapon.melee ? .52 :
@@ -1965,7 +2029,8 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
           );
           raycaster.near = 0;
           raycaster.far = Math.max(0, maxDistance);
-          const intersection = raycaster.intersectObjects(targets, true)[0];
+          const intersection = raycaster.intersectObjects(targets, true)
+            .find(hit => hit.object.userData.isHitbox);
           const target = intersection?.object.userData.enemyRef
             ? {
               enemy: intersection.object.userData.enemyRef,
@@ -2002,17 +2067,15 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
         }
         if (hits.size) {
           playSound("hit");
-          hitMarker.classList.add("visible");
-          clearTimeout(hitTimeout);
-          hitTimeout = setTimeout(() => hitMarker.classList.remove("visible"), 110);
+          showHitMarker();
           for (const { enemy, distance, pellets: hitPellets, hitZone } of hits.values()) {
             const rangeScale = player.weaponIndex === 2 ? .35 + .65 * Math.max(0, 1 - distance / 10) : 1;
             const behindBot = (enemy.facingX || 0) * (player.x - enemy.x) +
               (enemy.facingY || 0) * (player.y - enemy.y) < -distance * .35;
             const backstab = weapon.melee && behindBot;
             const damageScale = weapon.melee
-              ? hitZone === "head" || backstab ? 100 / weapon.damage : 1
-              : hitZone === "head" ? 2.2 : hitZone === "limb" ? .72 : 1;
+              ? hitZone === "head" || backstab ? enemy.health / weapon.damage : 1
+              : hitZone === "head" ? 3 : hitZone === "limb" ? .5 : 1;
             enemy.health -= weapon.damage * damageScale * (hitPellets / pelletCount) * rangeScale;
             enemy.underFire = true;
             enemy.state = "dodge";
@@ -2021,14 +2084,11 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
               showHitConfirmation(noScope ? "NO-SCOPE" : backstab ? "BACKSTAB" : "HEADSHOT", noScope);
             }
             if (enemy.health > 0) continue;
-            enemies.splice(enemies.indexOf(enemy), 1);
-            player.score += 100;
-            awardKillstreak();
-            replayBuffer.recordEvent(performance.now(), {
-              type: "kill", weapon: player.weaponIndex, headshot: hitZone === "head",
-              noScope, x: enemy.x, y: enemy.y
+            eliminateEnemy(enemy, {
+              weaponIndex: player.weaponIndex,
+              headshot: hitZone === "head",
+              noScope
             });
-            document.querySelector("#score").textContent = String(player.score).padStart(4, "0");
             setCombatMessage("TARGET ELIMINATED", 650);
             if (gameMode === "tdm" ? !enemies.some(enemy => enemy.team === 1) :
               !isWaveMode() && enemies.length === 0) endGame();
@@ -2049,10 +2109,11 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
 
       function update(dt) {
         updateTransientEffects(dt);
-        playerPitch = Math.max(-1.35, Math.min(1.35, playerPitch - recoilPitch * dt * 7));
-        player.angle -= recoilYaw * dt * 7;
-        recoilPitch *= Math.exp(-dt * 8);
-        recoilYaw *= Math.exp(-dt * 8);
+        const recoilReturn = 1 - Math.exp(-dt * 12);
+        playerPitch = Math.max(-1.35, Math.min(1.35, playerPitch - recoilPitch * recoilReturn));
+        player.angle -= recoilYaw * recoilReturn;
+        recoilPitch *= 1 - recoilReturn;
+        recoilYaw *= 1 - recoilReturn;
         const nearbyThreats = enemies.filter(enemy => Math.hypot(enemy.x - player.x, enemy.y - player.y) < 12).length;
         audioManager.setCombatIntensity(Math.min(1, nearbyThreats / 4));
         fireCooldown = Math.max(0, fireCooldown - dt);
@@ -2103,10 +2164,10 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
           movementBob *= Math.max(0, 1 - dt * 5);
         }
         if (dashTimer > 0) {
-          const dashSpeed = 9 * (.35 + .65 * dashTimer / dashDuration);
+          const dashSpeed = 9 * currentWeapon().movementSpeed * (.35 + .65 * dashTimer / dashDuration);
           movePlayer(dashDirectionX * dashSpeed * dt, dashDirectionY * dashSpeed * dt);
         } else {
-          const speed = (aiming ? 2 : sprinting ? 4.2 : 3.2) * dt;
+          const speed = (aiming ? 2 : sprinting ? 4.2 : 3.2) * currentWeapon().movementSpeed * dt;
           movePlayer((Math.cos(player.angle) * forward + Math.cos(player.angle - Math.PI / 2) * strafe) / length * speed,
             (Math.sin(player.angle) * forward + Math.sin(player.angle - Math.PI / 2) * strafe) / length * speed);
         }
@@ -2123,13 +2184,16 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
           const distance = action.distance;
           enemy.sprinting = action.sprinting;
           enemy.phase += dt * (distance > 1.15 ? (enemy.sprinting ? 11 : 7) : 2);
-          enemy.faceAngle = action.moveX || action.moveY
+          enemy.faceAngle = action.state === "attack" || action.state === "cover"
+            ? Math.atan2(player.y - enemy.y, player.x - enemy.x)
+            : action.moveX || action.moveY
             ? Math.atan2(action.moveY, action.moveX)
             : Math.atan2(player.y - enemy.y, player.x - enemy.x);
           enemy.facingX = Math.cos(enemy.faceAngle);
           enemy.facingY = Math.sin(enemy.faceAngle);
           if (action.moveX || action.moveY) {
-            const speed = enemy.sprinting ? 2.4 : action.state === "cover" || action.state === "dodge" ? 1.55 : 1.25;
+            const speed = (enemy.sprinting ? 2.4 : action.state === "cover" || action.state === "dodge" ? 1.55 : 1.25) *
+              (enemy.movementMultiplier || 1);
             const vx = action.moveX * speed * dt;
             const vy = action.moveY * speed * dt;
             if (canOccupyOnMap(map, enemy.x + vx, enemy.y, .2)) enemy.x += vx;
@@ -2183,6 +2247,7 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
       function frame(time) {
         const dt = Math.min((time - lastTime) / 1000 || 0, .05);
         lastTime = time;
+        vfxSystem.updateDecals(time);
         if (running) update(dt);
         let playbackSample = null;
         if (replayPlayback) {
@@ -2294,6 +2359,7 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
         audioManager.setCombatIntensity(0);
         firing = false;
         aiming = false;
+        updateAimHud();
         overlay.hidden = false;
         document.querySelector("#pause-settings-button").hidden = true;
         const leaderboardPanel = document.querySelector("#leaderboard-panel");
@@ -2392,6 +2458,8 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
       document.querySelector("#public-servers-button").addEventListener("click", openServerBrowser);
       document.querySelector("#private-servers-button").addEventListener("click", openServerBrowser);
       document.querySelector("#create-room-button").addEventListener("click", createPrivateRoom);
+      document.querySelector("#configure-room-button").addEventListener("click", toggleRoomConfiguration);
+      document.querySelector("#apply-room-config-button").addEventListener("click", applyRoomConfiguration);
       document.querySelector("#connect-room-button").addEventListener("click", connectToRoom);
       document.querySelector("#room-code-input").addEventListener("keydown", event => {
         if (event.code === "Enter") connectToRoom();
@@ -2582,8 +2650,7 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
         const deltaY = event.clientY - lastLookY;
         lastLookX = event.clientX;
         lastLookY = event.clientY;
-        const sensitivity = .006 * controlSettings.mouseSensitivity *
-          (aiming ? (currentWeapon().scoped ? controlSettings.scopeSensitivity : .66) : 1);
+        const sensitivity = .006 * controlSettings.mouseSensitivity * lookSensitivityMultiplier();
         player.angle -= deltaX * sensitivity;
         playerPitch = Math.max(-1.35, Math.min(1.35, playerPitch - deltaY * sensitivity));
         weaponLagX = Math.max(-18, Math.min(18, weaponLagX + deltaX * .12));
@@ -2630,8 +2697,7 @@ import { ReplayBuffer } from "./ReplayBuffer.js";
       });
       window.addEventListener("mousemove", event => {
         if (running && (document.pointerLockElement === canvas || pointerLockUnavailable)) {
-          const sensitivity = .0025 * controlSettings.mouseSensitivity *
-            (aiming ? (currentWeapon().scoped ? controlSettings.scopeSensitivity : .66) : 1);
+          const sensitivity = .0025 * controlSettings.mouseSensitivity * lookSensitivityMultiplier();
           player.angle -= event.movementX * sensitivity;
           playerPitch = Math.max(-1.35, Math.min(1.35, playerPitch - event.movementY * sensitivity));
           weaponLagX = Math.max(-18, Math.min(18, weaponLagX + event.movementX * .12));
