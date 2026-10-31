@@ -1,0 +1,48 @@
+export const WEAPON_PROFILES = [
+  { name: "ASSAULT RIFLE", short: "RIFLE", magazine: 30, ammo: 30, reserve: 90, damage: 50, spread: .075, interval: .18, reloadTime: 1.15, range: 18, auto: true, recoil: 9 },
+  { name: "PRECISION SNIPER", short: "SNIPER", magazine: 5, ammo: 5, reserve: 25, damage: 100, spread: 0, interval: 1.25, reloadTime: 1.6, range: 22, scoped: true, chamberTime: .72, recoil: 20 },
+  { name: "BREACH SHOTGUN", short: "SHOTGUN", magazine: 8, ammo: 8, reserve: 40, damage: 100, pellets: 7, spread: .24, interval: .65, reloadTime: 1.4, range: 9, recoil: 15 },
+  { name: "COMPACT SMG", short: "SMG", magazine: 32, ammo: 32, reserve: 128, damage: 34, spread: .12, interval: .085, reloadTime: 1.1, range: 13, auto: true, recoil: 5 },
+  { name: "COMBAT KNIFE", short: "KNIFE", magazine: 0, ammo: 0, reserve: 0, damage: 52, spread: .6, interval: .48, melee: true, range: 1.8, recoil: 7 }
+].map(profile => ({
+  ...profile,
+  attachments: { optic: false, suppressor: false, foregrip: false }
+}));
+
+export class WeaponManager {
+  constructor(profiles = WEAPON_PROFILES) {
+    this.weapons = profiles.map(profile => ({
+      ...profile,
+      attachments: { ...profile.attachments }
+    }));
+    this.selectedIndex = 0;
+  }
+
+  current(index = this.selectedIndex) {
+    const weapon = this.weapons[index];
+    if (!weapon) throw new RangeError(`Unknown weapon slot: ${index}`);
+    return weapon;
+  }
+
+  select(index) {
+    if (!Number.isInteger(index) || index < 0 || index >= this.weapons.length) return false;
+    this.selectedIndex = index;
+    return true;
+  }
+
+  setAttachment(index, name, enabled) {
+    const weapon = this.current(index);
+    if (!(name in weapon.attachments)) throw new RangeError(`Unknown weapon attachment: ${name}`);
+    weapon.attachments[name] = Boolean(enabled);
+    return weapon.attachments[name];
+  }
+
+  resetAmmo() {
+    const magazines = [30, 5, 8, 32, 0];
+    const reserves = [90, 25, 40, 128, 0];
+    this.weapons.forEach((weapon, index) => {
+      weapon.ammo = magazines[index];
+      weapon.reserve = reserves[index];
+    });
+  }
+}

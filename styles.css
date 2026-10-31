@@ -103,6 +103,24 @@
     }
     .hit-marker::after { transform: translate(-50%, -50%) rotate(-45deg); }
     .hit-marker.visible { opacity: 1; }
+    .hit-confirmation {
+      position: absolute; left: 50%; top: calc(50% + 24px); transform: translateX(-50%);
+      display: flex; align-items: center; gap: 5px; color: #d3ef87;
+      font-size: 9px; font-weight: 800; letter-spacing: .16em;
+      text-shadow: 0 2px 6px #000; opacity: 0; pointer-events: none;
+      transition: opacity .12s;
+    }
+    .hit-confirmation svg { width: 18px; height: 18px; fill: currentColor; }
+    .hit-confirmation.visible { opacity: 1; }
+    .hit-confirmation.no-scope { color: #f1d78f; }
+    .replay-indicator {
+      position: absolute; z-index: 3; left: 50%; top: 12%;
+      transform: translateX(-50%); padding: 8px 12px;
+      border: 1px solid #c1e16d88; background: #101510bb;
+      color: #d3ef87; font-size: 9px; font-weight: 800; letter-spacing: .18em;
+      text-shadow: 0 2px 6px #000; pointer-events: none;
+    }
+    .replay-indicator[hidden] { display: none; }
     .weapon-toast {
       position: absolute; left: 50%; bottom: 17%; transform: translateX(-50%);
       color: #dce5d1; font-size: 10px; font-weight: 700; letter-spacing: .18em;
@@ -249,6 +267,15 @@
     .attachment-options { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px 18px; }
     .attachment-options label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
     .attachment-options input { accent-color: #c1e16d; }
+    .leaderboard-panel {
+      margin: 14px 0; padding: 12px; border: 1px solid #53604e;
+      background: #101510aa; text-align: left;
+    }
+    .leaderboard-panel[hidden] { display: none; }
+    .leaderboard-panel ol { margin: 8px 0; padding-left: 24px; color: #dce5d1; font-size: 11px; }
+    .leaderboard-panel li { padding: 3px 0; }
+    .leaderboard-panel li span { float: right; color: #c1e16d; }
+    .leaderboard-panel p { margin: 6px 0; color: #8e9a8b; font-size: 10px; }
     .mode-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 20px 0 12px; }
     .mode-card {
       display: flex; flex-direction: column; gap: 7px; min-height: 82px; margin: 0; padding: 12px;

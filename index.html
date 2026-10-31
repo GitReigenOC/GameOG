@@ -3,8 +3,6 @@ title: BLACKSITE — Tactical Arena
 description: A browser-based tactical arena training game.
 ---
 
-<link rel="icon" type="image/png" href="{{ '/BLogo.png' | blob:https://chatgpt.com/58f474cc-cbcd-4b7c-8c89-99e771e6029f }}">
-
   <main class="game-shell">
     <header class="topbar">
       <div class="brand">BLACK<span>SITE</span></div>
@@ -36,6 +34,8 @@ description: A browser-based tactical arena training game.
       </div>
       <div class="crosshair" id="crosshair"></div>
       <div class="hit-marker" id="hit-marker"></div>
+      <div class="hit-confirmation" id="hit-confirmation" aria-live="polite"></div>
+      <div class="replay-indicator" id="replay-indicator" hidden>FINAL ELIMINATION / REPLAY</div>
       <div class="weapon-toast" id="weapon-toast"></div>
       <div class="combat-message" id="combat-message" aria-live="polite"></div>
       <div class="scope-overlay" id="scope-overlay" hidden aria-hidden="true">
@@ -193,6 +193,16 @@ description: A browser-based tactical arena training game.
             <input id="scope-sensitivity-setting" type="range" min="0.2" max="1" step="0.02" value="0.44">
             <span class="setting-hint">Multiplies your mouse sensitivity while scoped</span>
           </label>
+          <label class="setting-row" for="fov-setting">
+            <span>Field of view <output id="fov-value" for="fov-setting">82°</output></span>
+            <input id="fov-setting" type="range" min="65" max="110" step="1" value="82">
+            <span class="setting-hint">Horizontal display angle in degrees</span>
+          </label>
+          <label class="setting-row" for="volume-setting">
+            <span>Master volume <output id="volume-value" for="volume-setting">70%</output></span>
+            <input id="volume-setting" type="range" min="0" max="1" step="0.02" value="0.7">
+            <span class="setting-hint">Controls game sound and ambient layers</span>
+          </label>
           <div class="menu-actions">
             <button type="button" id="settings-back-button">Back</button>
           </div>
@@ -203,6 +213,12 @@ description: A browser-based tactical arena training game.
           <div class="kicker" id="overlay-kicker">SINGLE-PLAYER / SURVIVAL</div>
           <h1 id="overlay-title">HOLD THE<br>PERIMETER</h1>
           <p id="overlay-copy">Survive incoming waves in a hostile training zone. Aim with your mouse, fire to engage, and keep moving.</p>
+          <section class="leaderboard-panel" id="leaderboard-panel" hidden>
+            <div class="kicker">MATCH LEADERBOARD</div>
+            <ol id="leaderboard-list"></ol>
+            <p id="leaderboard-status" role="status"></p>
+            <button type="button" class="button-secondary" id="replay-button" hidden>Replay final 10 seconds</button>
+          </section>
           <button id="start-button">Deploy</button>
           <button id="pause-settings-button" class="button-secondary" type="button" hidden>Settings</button>
           <button id="return-menu-button" class="button-secondary" type="button" hidden>Return to menu</button>
